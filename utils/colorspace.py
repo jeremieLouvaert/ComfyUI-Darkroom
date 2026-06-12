@@ -71,6 +71,79 @@ _AP0_TO_SRGB = np.array([
 
 
 # ---------------------------------------------------------------------------
+# OkLab (Björn Ottosson, 2020 — canonical published constants).
+# Perceptually-uniform Lab built on a cube-root LMS cone response.
+# Forward:  linear sRGB -> LMS (M1) -> cbrt -> Lab (M2)
+# Inverse:  Lab -> LMS' (M2_inv) -> cube -> linear sRGB (M1_inv)
+# Note row-vector convention (result = img @ M.T) per _apply_matrix.
+# ---------------------------------------------------------------------------
+
+# M1: linear sRGB (D65) -> LMS
+_OKLAB_M1 = np.array([
+    [0.4122214708, 0.5363325363, 0.0514459929],
+    [0.2119034982, 0.6806995451, 0.1073969566],
+    [0.0883024619, 0.2817188376, 0.6299787005],
+], dtype=np.float32)
+
+# M2: LMS' (cube-rooted) -> Lab
+_OKLAB_M2 = np.array([
+    [0.2104542553,  0.7936177850, -0.0040720468],
+    [1.9779984951, -2.4285922050,  0.4505937099],
+    [0.0259040371,  0.7827717662, -0.8086757660],
+], dtype=np.float32)
+
+# inverse M2: Lab -> LMS'
+_OKLAB_M2_INV = np.array([
+    [1.0,  0.3963377774,  0.2158037573],
+    [1.0, -0.1055613458, -0.0638541728],
+    [1.0, -0.0894841775, -1.2914855480],
+], dtype=np.float32)
+
+# inverse M1: LMS -> linear sRGB (D65)
+_OKLAB_M1_INV = np.array([
+    [ 4.0767416621, -3.3077115913,  0.2309699292],
+    [-1.2684380046,  2.6097574011, -0.3413193965],
+    [-0.0041960863, -0.7034186147,  1.7076147010],
+], dtype=np.float32)
+
+
+def linear_srgb_to_oklab(img):
+    """Linear sRGB (D65, H,W,3) -> OkLab (L, a, b). Sign-preserving cbrt."""
+    lms = _apply_matrix(img.astype(np.float32), _OKLAB_M1)
+    lms_ = np.cbrt(lms).astype(np.float32)
+    return _apply_matrix(lms_, _OKLAB_M2)
+
+
+def oklab_to_linear_srgb(lab):
+    """OkLab (L, a, b) -> linear sRGB (D65). Inverse of linear_srgb_to_oklab."""
+    lms_ = _apply_matrix(lab.astype(np.float32), _OKLAB_M2_INV)
+    lms = (lms_ ** 3).astype(np.float32)
+    return _apply_matrix(lms, _OKLAB_M1_INV)
+
+
+def oklab_to_oklch(lab):
+    """OkLab (L, a, b) -> OkLch (L, C, h). h in radians via atan2(b, a)."""
+    lab = lab.astype(np.float32)
+    L = lab[..., 0]
+    a = lab[..., 1]
+    b = lab[..., 2]
+    C = np.hypot(a, b).astype(np.float32)
+    h = np.arctan2(b, a).astype(np.float32)
+    return np.stack([L, C, h], axis=-1).astype(np.float32)
+
+
+def oklch_to_oklab(lch):
+    """OkLch (L, C, h) -> OkLab (L, a, b). a = C*cos(h), b = C*sin(h)."""
+    lch = lch.astype(np.float32)
+    L = lch[..., 0]
+    C = lch[..., 1]
+    h = lch[..., 2]
+    a = (C * np.cos(h)).astype(np.float32)
+    b = (C * np.sin(h)).astype(np.float32)
+    return np.stack([L, a, b], axis=-1).astype(np.float32)
+
+
+# ---------------------------------------------------------------------------
 # sRGB gamma (shared with color.py but repeated here to avoid circular import)
 # ---------------------------------------------------------------------------
 

@@ -29,6 +29,7 @@ from .hue_vs_sat import NODE_CLASS_MAPPINGS as HVS, NODE_DISPLAY_NAME_MAPPINGS a
 from .lum_vs_sat import NODE_CLASS_MAPPINGS as LVS, NODE_DISPLAY_NAME_MAPPINGS as LVS_N
 from .sat_vs_sat import NODE_CLASS_MAPPINGS as SVS, NODE_DISPLAY_NAME_MAPPINGS as SVS_N
 from .color_warper import NODE_CLASS_MAPPINGS as CW, NODE_DISPLAY_NAME_MAPPINGS as CW_N
+from .oklab_color import NODE_CLASS_MAPPINGS as OKL, NODE_DISPLAY_NAME_MAPPINGS as OKL_N
 # Wave 5: Pipeline — LUT & Color Management
 from .lut_identity import NODE_CLASS_MAPPINGS as LI, NODE_DISPLAY_NAME_MAPPINGS as LI_N
 from .lut_export import NODE_CLASS_MAPPINGS as LE, NODE_DISPLAY_NAME_MAPPINGS as LE_N
@@ -53,5 +54,5 @@ from .cmyk_gamut_warning import NODE_CLASS_MAPPINGS as KGW, NODE_DISPLAY_NAME_MA
 from .cmyk_tac_check import NODE_CLASS_MAPPINGS as KTC, NODE_DISPLAY_NAME_MAPPINGS as KTC_N
 from .cmyk_export import NODE_CLASS_MAPPINGS as KEX, NODE_DISPLAY_NAME_MAPPINGS as KEX_N
 
-NODE_CLASS_MAPPINGS = {**FSC, **FSB, **FG, **FGP, **HAL, **PS, **CP, **CA, **VIG, **LD, **PC, **LP, **WB, **ET, **HSL, **CTD, **VIB, **SP, **NR, **STU, **CQ, **TC, **LGG, **LW, **TWCB, **HVH, **HVS, **LVS, **SVS, **CW, **LI, **LE, **LA, **LBI, **LBE, **CST, **AT, **RL, **RMS, **SFS, **HIST, **VEC, **CM, **KSP, **KGW, **KTC, **KEX}
-NODE_DISPLAY_NAME_MAPPINGS = {**FSC_N, **FSB_N, **FG_N, **FGP_N, **HAL_N, **PS_N, **CP_N, **CA_N, **VIG_N, **LD_N, **PC_N, **LP_N, **WB_N, **ET_N, **HSL_N, **CTD_N, **VIB_N, **SP_N, **NR_N, **STU_N, **CQ_N, **TC_N, **LGG_N, **LW_N, **TWCB_N, **HVH_N, **HVS_N, **LVS_N, **SVS_N, **CW_N, **LI_N, **LE_N, **LA_N, **LBI_N, **LBE_N, **CST_N, **AT_N, **RL_N, **RMS_N, **SFS_N, **HIST_N, **VEC_N, **CM_N, **KSP_N, **KGW_N, **KTC_N, **KEX_N}
+NODE_CLASS_MAPPINGS = {**FSC, **FSB, **FG, **FGP, **HAL, **PS, **CP, **CA, **VIG, **LD, **PC, **LP, **WB, **ET, **HSL, **CTD, **VIB, **SP, **NR, **STU, **CQ, **TC, **LGG, **LW, **TWCB, **HVH, **HVS, **LVS, **SVS, **CW, **OKL, **LI, **LE, **LA, **LBI, **LBE, **CST, **AT, **RL, **RMS, **SFS, **HIST, **VEC, **CM, **KSP, **KGW, **KTC, **KEX}
+NODE_DISPLAY_NAME_MAPPINGS = {**FSC_N, **FSB_N, **FG_N, **FGP_N, **HAL_N, **PS_N, **CP_N, **CA_N, **VIG_N, **LD_N, **PC_N, **LP_N, **WB_N, **ET_N, **HSL_N, **CTD_N, **VIB_N, **SP_N, **NR_N, **STU_N, **CQ_N, **TC_N, **LGG_N, **LW_N, **TWCB_N, **HVH_N, **HVS_N, **LVS_N, **SVS_N, **CW_N, **OKL_N, **LI_N, **LE_N, **LA_N, **LBI_N, **LBE_N, **CST_N, **AT_N, **RL_N, **RMS_N, **SFS_N, **HIST_N, **VEC_N, **CM_N, **KSP_N, **KGW_N, **KTC_N, **KEX_N}
