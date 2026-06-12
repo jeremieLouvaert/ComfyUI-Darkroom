@@ -1,18 +1,19 @@
 # ComfyUI-Darkroom
 
-Professional color grading and film emulation suite for ComfyUI — 46 nodes, 161 film stocks, 35 spectral neg×print LUTs, 102 lens profiles, reference-driven Color Match, colorist scopes, full CMYK print workflow, zero API costs.
+Professional color grading and film emulation suite for ComfyUI — 48 nodes, 161 film stocks, 35 spectral neg×print LUTs, 102 lens profiles, reference-driven Color Match, colorist scopes, full CMYK print workflow, zero API costs.
 
 The most complete color toolset in the ComfyUI ecosystem. From physics-based film emulation to DaVinci Resolve-level color grading, Camera Raw processing, optical simulation, LUT export, ACES color management, and magazine-ready CMYK print output — everything runs locally with no external dependencies.
 
 ## Nodes
 
-### Film Emulation (6 nodes)
+### Film Emulation (7 nodes)
 
 | Node | Description |
 |------|-------------|
 | **Film Stock (Color)** | 111 color film stocks with per-channel H&D characteristic curves. Kodak Portra, Ektar, Fuji Velvia, Cinestill, Polaroid, and more. Capture One curve data integration. |
 | **Film Stock (B&W)** | 50 B&W stocks with real spectral sensitivity coefficients. Ilford HP5+, Kodak Tri-X, T-MAX, with pushed variants. |
 | **Film Grain** | Multi-octave luminance-dependent grain. ISO-scaled, resolution-aware, blue-channel emphasis like real film. |
+| **Film Grain Pro** | Resolution-independent stochastic grain (Newson et al. 2017). Physically derived, so grain holds a fixed fraction of the frame at any resolution. Monte-Carlo rendered, tone-preserving, with grain size, radius variation, and per-channel color grain. |
 | **Halation** | Physics-based light bounce from film base. Screen-blended highlight glow with disk blur. |
 | **Print Stock** | Photographic paper simulation — the negative-to-print chain. |
 | **Cross Process** | E-6 in C-41 and C-41 in E-6 cross-processing color shifts. |
@@ -31,12 +32,13 @@ The most complete color toolset in the ComfyUI ecosystem. From physics-based fil
 | **Skin Tone Uniformity** | Mask-weighted mean pull for even skin tones. 6 skin type presets. Preserves texture. |
 | **Color Qualifier** | Color range analysis and isolation with 19 action presets combining selection + correction. |
 
-### Color Grading (9 nodes)
+### Color Grading (10 nodes)
 
 | Node | Description |
 |------|-------------|
 | **Tone Curve** | 5-point cubic spline per channel (PchipInterpolator — monotonic, no overshoot). 11 presets: S-curves, Faded Blacks, Matte Film, Cross-over pushes. |
 | **Lift Gamma Gain** | DaVinci Resolve primary corrector. Per-channel R/G/B + Master for Lift, Gamma, Gain, and Offset — 16 precision sliders. |
+| **OkLab Color** | Perceptually-uniform grading in OkLab / OkLch. Lightness and contrast that hold hue and chroma, and chroma that stays even across every hue. The orthogonal-channel separation makes that true by construction, not by tuning. Controls: lightness, contrast, chroma, hue, and a/b tint. |
 | **Log Wheels** | Resolve Log-mode grading. Soft Gaussian zone masks in log2-encoded luminance space. Hue angle + saturation + density per zone. 7 presets. |
 | **3-Way Color Balance** | Preset-first creative color tinting. Shadow/midtone/highlight zones with hue + intensity. 15 looks — Orange & Teal, Vintage Warm, Moonlight Blue, Bleach Bypass, and more. |
 | **Hue vs Hue** | Remap specific hue ranges to different hues. 8 bands with feathering. 9 presets — skin tone correction, sky shifts, autumn warmth. |
@@ -171,10 +173,10 @@ LUT Identity ─► lattice ──┤                                           
 A 3D LUT is a per-pixel color lookup. It has no idea about neighboring pixels. So only nodes that transform each pixel independently can be baked:
 
 **Allowed in the bake chain:**
-Film Stock (Color), Film Stock (B&W), Print Stock, Cross Process, White Balance, Exposure & Tone, HSL Selective, Vibrance, Tone Curve, Lift Gamma Gain, Log Wheels, 3-Way Color Balance, Hue vs Hue, Hue vs Sat, Lum vs Sat, Sat vs Sat, Color Warper, Color Space Transform, ACES Tonemap, LUT Apply.
+Film Stock (Color), Film Stock (B&W), Print Stock, Cross Process, White Balance, Exposure & Tone, HSL Selective, Vibrance, Tone Curve, Lift Gamma Gain, OkLab Color, Log Wheels, 3-Way Color Balance, Hue vs Hue, Hue vs Sat, Lum vs Sat, Sat vs Sat, Color Warper, Color Space Transform, ACES Tonemap, LUT Apply.
 
 **NOT allowed in the bake chain** (they use pixel neighborhoods and will corrupt the lattice):
-Film Grain, Halation, Clarity / Texture / Dehaze, Sharpening Pro, Noise Reduction, Skin Tone Uniformity, Color Qualifier (partial — uses local masks), Chromatic Aberration, Vignette, Lens Distortion, Perspective Correct, Lens Profile.
+Film Grain, Film Grain Pro, Halation, Clarity / Texture / Dehaze, Sharpening Pro, Noise Reduction, Skin Tone Uniformity, Color Qualifier (partial — uses local masks), Chromatic Aberration, Vignette, Lens Distortion, Perspective Correct, Lens Profile.
 
 If you want spatial effects on your final image, apply them to `graded_photo` **after** Extract, not inside the bake chain.
 
@@ -190,7 +192,7 @@ git clone https://github.com/jeremieLouvaert/ComfyUI-Darkroom.git
 pip install -r ComfyUI-Darkroom/requirements.txt
 ```
 
-Restart ComfyUI. All 46 nodes appear under **AKURATE/Darkroom/** with subcategories: Film (incl. Spectral), Raw, Grading (incl. Color Match), Lens, Pipeline, RAW, Scopes, Print.
+Restart ComfyUI. All 48 nodes appear under **AKURATE/Darkroom/** with subcategories: Film (incl. Spectral), Raw, Grading (incl. Color Match), Lens, Pipeline, RAW, Scopes, Print.
 
 ### Dependencies
 
