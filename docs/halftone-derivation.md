@@ -135,6 +135,70 @@ teeth directly guard the NodeForge halftone INVERSION bug class:
 Run on real embedded torch/python; report PASS/FAIL honestly incl. the negative
 control and the perf-gate timing.
 
-## Deferred (v1.x / v2)
-FM / error-diffusion mode; square/line/ellipse dot shapes; per-channel CMYK angle
-overrides; ICC-accurate separation (use cmyk_softproof for proofing).
+## v1.x — dot shapes + FM method (signed off 2026-06-14, additive)
+
+Two new controls, all vectorized (same perf class as v1, no new gate concern).
+The v1 round AM dot is UNCHANGED (keeps the shipped look); new behavior is opt-in.
+
+### New control: `dot_shape` (AM only) — default "round"
+Cell phase from the rotated, scaled screen coords (`u,v` already = coord·2π/p):
+`pu = mod(u/(2π), 1) - 0.5`, `pv = mod(v/(2π), 1) - 0.5` ∈ [-0.5, 0.5).
+Threshold `T ∈ [0,1]` (ink where `coverage > T`; T=0 at cell center → dot grows
+outward, so monotonicity / no-inversion holds for every shape):
+- **round** (UNCHANGED, the proven cos+cos field with the proper dot↔hole
+  transition): `D=(cos u+cos v)/2 ; T=(1-D)/2`. (Keep the v1 path verbatim for this
+  option — do NOT swap it to the phase formula, the look is already shipped.)
+- **line** (engraving / linocut screen): `D = cos(u) ; T=(1-D)/2`. 1-D → parallel
+  lines (perpendicular to the screen-angle direction) that thicken with tone.
+- **square** (retro): `T = clip(2·max(|pu|, |pv|), 0, 1)` (Chebyshev metric; T=1 only
+  on the cell edges = measure zero, so it fills to solid).
+- **ellipse** (chain dot): `T = clip(hypot(pu, 1.6·pv) / hypot(0.5, 1.6·0.5), 0, 1)`
+  — the elliptical distance NORMALIZED by the corner distance so `T=1` only at the 4
+  cell corners (measure zero). Do NOT use `clip(2·hypot(...),0,1)`: that pins T=1 over
+  a 2D region (~half the cell, outside the inscribed ellipse) which ink can never
+  reach (`coverage > 1` impossible), capping ink at ~49% so SOLID BLACKS ARE
+  UNREACHABLE. Normalizing lets the dots grow → merge → fill the inter-dot gaps last,
+  spanning the full tonal range. (Guarded by an ellipse black-endpoint test.)
+
+`dot_shape` applies to AM only (FM is dispersed, shapeless).
+
+**TONE-LINEARIZATION (correction added 2026-06-14 at review — load-bearing).**
+`dot_shape` must change DOT GEOMETRY ONLY, never overall tone. But the raw square/
+ellipse fields are not tone-linear: their ink area as a function of input coverage
+`c` is `A(c)=CDF_T(c)`, which for square is `c²` (50% in → 25% ink → washed-out
+midtones, a major visible tone shift, ~0.5→0.75). FIX: pre-warp the coverage fed to
+the screen by the inverse-area so ink area ≈ c for every shape:
+`warp(c) = quantile of the shape's T-field at probability c` (= `CDF_T⁻¹(c)`), since
+ink area `= CDF_T(warp(c)) = c`. Closed form for **square** = `sqrt(c)`; for
+**ellipse** use the numeric quantile of its T sampled over the cell (clipping makes
+the closed form messy). Apply the warp to **square and ellipse only** — **round and
+line are already ~tone-linear and stay verbatim** (round is the shipped look; do not
+warp it). The warp is monotone with `warp(0)=0, warp(1)=1`, so monotonicity/no-
+inversion and endpoints are preserved. RESULT: all shapes reproduce the same
+tonality (tone-preservation passes for square/ellipse too); only the dot geometry
+differs — what a colourist expects from a shape control. FM (Bayer) is already
+tone-linear (uniform threshold), no warp.
+
+### New control: `method` — default "AM (clustered dot)"
+- **AM (clustered dot)** — v1 behavior + dot_shape, angle/rosette, supersample AA.
+- **FM (dispersed / Bayer)** — stochastic-family dispersed-dot screen via an n×n
+  **Bayer ordered-dither matrix** (n=8, generated recursively — asset-free, fully
+  vectorized). `thr = (bayer + 0.5)/n²` tiled over the image; `ink = coverage > thr`.
+  FM IGNORES `dot_shape`, `angle`/rosette, and `supersample` (it is inherently
+  1px-resolution dispersed — document that those controls are AM-only). For CMYK
+  FM, OFFSET the Bayer tile origin per channel (e.g. +0/+3/+5/+7 px) to decorrelate
+  the plates so inks don't all land on the same pixels (muddy otherwise).
+  DECISION: true Floyd-Steinberg error diffusion is deliberately NOT used — it is
+  serial / unvectorizable and would blow the perf gate. Bayer gives the FM-family
+  retro-dither aesthetic at AM speed. True error-diffusion / blue-noise = v1.2 note.
+
+### Teeth (extend `tools/test_halftone.py`)
+The v1 invariants must hold for the NEW paths too:
+- Tonal **monotonicity / no-inversion** PARAMETRIZED over every `dot_shape`
+  (round/line/square/ellipse, AM) AND over FM — each: gradient in → monotone
+  non-decreasing out. The flipped-comparison NEGATIVE CONTROL still fires.
+- Tone preservation + endpoints checked for at least one new shape and for FM.
+
+## Deferred (v1.2 / v2)
+True FM error-diffusion (Floyd-Steinberg) / blue-noise screening; per-channel CMYK
+angle overrides; ICC-accurate separation (use cmyk_softproof for proofing).

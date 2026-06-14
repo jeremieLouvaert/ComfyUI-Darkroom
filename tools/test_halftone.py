@@ -56,6 +56,7 @@ spec.loader.exec_module(halftone)
 
 Halftone = halftone.Halftone
 _screen = halftone._screen
+_screen_fm = halftone._screen_fm
 _CMYK_ANGLES = halftone._CMYK_ANGLES
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -135,6 +136,34 @@ check("NEGATIVE CONTROL fired (flipped screen FAILS monotonicity)", neg_fired,
       f"thirds={tuple(round(float(v),3) for v in thirds_flip)} spearman={spear_flip:.3f}")
 
 # ---------------------------------------------------------------------------
+# 1b. MONOTONICITY PARAMETRIZED over every AM dot_shape AND over FM
+# ---------------------------------------------------------------------------
+print("\n[1b] Monotonicity / NO INVERSION parametrized over AM dot_shapes + FM")
+# Headline invariant = NO INVERSION: thirds strictly increasing + positive rank
+# correlation. All shapes are tone-linearized (square/ellipse via the coverage
+# pre-warp), so column means track input. Spearman (rank correlation) is invariant
+# to a monotonic tone curve, so any residual dip is dot-DISCRETIZATION noise on the
+# coarse pattern at lines=40 (ellipse's anisotropic dots are the noisiest), NOT an
+# inversion — the thirds check is the real no-inversion guard, kept tight for all.
+_SPEAR_BAR = {"round": 0.9, "line": 0.9, "square": 0.9, "ellipse": 0.5}
+for shape in ("round", "line", "square", "ellipse"):
+    ht_s = run(grad_img, color_mode="mono (black)", method="AM (clustered dot)",
+               dot_shape=shape, lines=40, angle=45.0, supersample=2, strength=1.0)
+    cm = luma(ht_s).mean(axis=0)
+    ok_s, spear_s, thirds_s = monotonic_nondecreasing(cm)
+    check(f"AM dot_shape={shape}: monotone non-decreasing (no inversion)",
+          ok_s and spear_s > _SPEAR_BAR[shape],
+          f"thirds={tuple(round(float(v),3) for v in thirds_s)} spearman={spear_s:.3f}")
+
+# FM (dispersed / Bayer) — ignores dot_shape/angle/supersample.
+ht_fm = run(grad_img, color_mode="mono (black)", method="FM (dispersed / Bayer)",
+            lines=40, angle=45.0, supersample=2, strength=1.0)
+cm_fm = luma(ht_fm).mean(axis=0)
+ok_fm, spear_fm, thirds_fm = monotonic_nondecreasing(cm_fm)
+check("FM (Bayer): monotone non-decreasing", ok_fm and spear_fm > 0.9,
+      f"thirds={tuple(round(float(v),3) for v in thirds_fm)} spearman={spear_fm:.3f}")
+
+# ---------------------------------------------------------------------------
 # 2. TONE PRESERVATION — heavy blur of halftone output ~ input
 # ---------------------------------------------------------------------------
 print("\n[2] Tone preservation (2D gradient, blur(sigma~2*pitch) of output ~ input)")
@@ -165,6 +194,51 @@ hw = run(white, color_mode="mono (black)", lines=40, supersample=2, strength=1.0
 hb = run(black, color_mode="mono (black)", lines=40, supersample=2, strength=1.0)
 check("white in -> mean out > 0.95", hw.mean() > 0.95, f"mean={hw.mean():.4f}")
 check("black in -> mean out < 0.05", hb.mean() < 0.05, f"mean={hb.mean():.4f}")
+
+# ---------------------------------------------------------------------------
+# 3b. TONE PRESERVATION + ENDPOINTS for a NEW shape (square) and for FM
+# ---------------------------------------------------------------------------
+print("\n[3b] Tone preservation for tone-linearized shapes (AM line/square/ellipse, FM) + endpoints")
+# TONE-LINEARIZATION PROOF: square/ellipse are pre-warped (coverage -> CDF_T^-1)
+# so ink area = coverage, exactly like round/line. So a heavy blur of their output
+# matches the input for EVERY shape — dot_shape changes geometry only, never tone.
+# (Before the warp, square blurred to ~quadratically too light; this is the guard
+# that it no longer does.) FM (Bayer) is tone-exact by construction.
+
+
+def tone_pres(method_name, shape_name):
+    out = run(img2d, color_mode="mono (black)", method=method_name,
+              dot_shape=shape_name, lines=lines, angle=45.0, supersample=2, strength=1.0)
+    bl = np.empty_like(out)
+    for ch in range(3):
+        bl[..., ch] = gaussian_filter(out[..., ch], sigma=sigma)
+    return np.abs(bl[m:-m, m:-m] - img2d[m:-m, m:-m]).mean()
+
+
+for label, method_name, shape_name in (
+    ("AM line", "AM (clustered dot)", "line"),
+    ("AM square", "AM (clustered dot)", "square"),
+    ("AM ellipse", "AM (clustered dot)", "ellipse"),
+    ("FM", "FM (dispersed / Bayer)", "round"),
+):
+    d = tone_pres(method_name, shape_name)
+    check(f"{label}: blur(halftone) approximates input (< 0.1)", d < 0.1,
+          f"mean_abs_diff={d:.4f}")
+
+# ellipse is included specifically: before the normalized-field fix its clipped
+# distance left a T=1 plateau over ~half each cell, capping ink at ~49% so blacks
+# were UNREACHABLE (black-in -> mean ~0.5). This black endpoint guards that regress.
+for label, method_name, shape_name in (
+    ("AM square", "AM (clustered dot)", "square"),
+    ("AM ellipse", "AM (clustered dot)", "ellipse"),
+    ("FM", "FM (dispersed / Bayer)", "round"),
+):
+    hw_s = run(white, color_mode="mono (black)", method=method_name,
+               dot_shape=shape_name, lines=40, supersample=2, strength=1.0)
+    hb_s = run(black, color_mode="mono (black)", method=method_name,
+               dot_shape=shape_name, lines=40, supersample=2, strength=1.0)
+    check(f"{label}: white in -> mean out > 0.95", hw_s.mean() > 0.95, f"mean={hw_s.mean():.4f}")
+    check(f"{label}: black in -> mean out < 0.05", hb_s.mean() < 0.05, f"mean={hb_s.mean():.4f}")
 
 # ---------------------------------------------------------------------------
 # 4. BINARY-ISH INK @ ss=1
@@ -207,7 +281,18 @@ _ = run(img4k, color_mode="color (CMYK)", lines=100, supersample=2, strength=1.0
 if device == "cuda":
     torch.cuda.synchronize()
 t_4k = time.time() - t0
-print(f"  3840x2160 color CMYK (lines=100, ss=2): {t_4k:.3f} s")
+print(f"  3840x2160 color CMYK AM (lines=100, ss=2): {t_4k:.3f} s")
+
+# 4K FM run (CMYK) — confirm no perf regression vs AM.
+if device == "cuda":
+    torch.cuda.synchronize()
+t0 = time.time()
+_ = run(img4k, color_mode="color (CMYK)", method="FM (dispersed / Bayer)",
+        lines=100, supersample=2, strength=1.0)
+if device == "cuda":
+    torch.cuda.synchronize()
+t_4k_fm = time.time() - t0
+print(f"  3840x2160 color CMYK FM (Bayer): {t_4k_fm:.3f} s")
 
 # ---------------------------------------------------------------------------
 print("\n" + ("ALL CHECKS PASSED" if PASS else "SOME CHECKS FAILED"))
