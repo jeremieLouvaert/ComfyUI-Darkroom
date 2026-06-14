@@ -1,12 +1,12 @@
 # ComfyUI-Darkroom
 
-Professional color grading and film emulation suite for ComfyUI — 51 nodes, 161 film stocks, 35 spectral neg×print LUTs, 102 lens profiles, reference-driven Color Match, colorist scopes, full CMYK print workflow, zero API costs.
+Professional color grading and film emulation suite for ComfyUI — 52 nodes, 161 film stocks, 35 spectral neg×print LUTs, 102 lens profiles, reference-driven Color Match, colorist scopes, full CMYK print workflow, zero API costs.
 
 The most complete color toolset in the ComfyUI ecosystem. From physics-based film emulation to DaVinci Resolve-level color grading, Camera Raw processing, optical simulation, LUT export, ACES color management, and magazine-ready CMYK print output — everything runs locally with no external dependencies.
 
 ## Nodes
 
-### Film Emulation (8 nodes)
+### Film Emulation (9 nodes)
 
 | Node | Description |
 |------|-------------|
@@ -18,6 +18,7 @@ The most complete color toolset in the ComfyUI ecosystem. From physics-based fil
 | **Print Stock** | Photographic paper simulation — the negative-to-print chain. |
 | **Cross Process** | E-6 in C-41 and C-41 in E-6 cross-processing color shifts. |
 | **Adjacency Acutance** | Film development edge effects (Mackie lines): a density overshoot on the bright side of an edge and an undershoot on the dark side, the organic 3D acutance of large-format film rather than digital over-sharpening. Asymmetric and edge-localized, with an asymmetry control (1 = symmetric, higher = filmic). Optional bromide drag adds the density-minus streaks that trail from bright areas in the direction of gravity or tank agitation. Derived from a published reaction-diffusion edge-effect model (implemented as the cheaper chemical-spread convolution). Physically inspired, not per-film calibrated. |
+| **Reciprocity Failure** | Simulates film reciprocity failure (the Schwarzschild effect) at long exposures: the per-channel color cast that no digital sensor has, plus crushed shadows. Pick a film and an exposure time and the long-exposure character is applied from the manufacturer datasheet corrections (Kodak E-31 and Fuji datasheets). Six stocks: B&W general, T-Max, Portra 400, Ektachrome E100 (cyan/blue cast), Provia 100F (magenta), Velvia 50 (green). Datasheet-character-grounded, not per-roll calibrated; film aging is a separate concern. |
 
 ### Camera Raw Tools (10 nodes)
 
@@ -181,7 +182,7 @@ LUT Identity ─► lattice ──┤                                           
 A 3D LUT is a per-pixel color lookup. It has no idea about neighboring pixels. So only nodes that transform each pixel independently can be baked:
 
 **Allowed in the bake chain:**
-Film Stock (Color), Film Stock (B&W), Print Stock, Cross Process, White Balance, Exposure & Tone, HSL Selective, Vibrance, Tone Curve, Lift Gamma Gain, OkLab Color, Log Wheels, 3-Way Color Balance, Hue vs Hue, Hue vs Sat, Lum vs Sat, Sat vs Sat, Color Warper, Color Space Transform, ACES Tonemap, LUT Apply.
+Film Stock (Color), Film Stock (B&W), Print Stock, Cross Process, Reciprocity Failure, White Balance, Exposure & Tone, HSL Selective, Vibrance, Tone Curve, Lift Gamma Gain, OkLab Color, Log Wheels, 3-Way Color Balance, Hue vs Hue, Hue vs Sat, Lum vs Sat, Sat vs Sat, Color Warper, Color Space Transform, ACES Tonemap, LUT Apply.
 
 **NOT allowed in the bake chain** (they use pixel neighborhoods and will corrupt the lattice):
 Film Grain, Film Grain Pro, Halftone, Adjacency Acutance, Halation, Clarity / Texture / Dehaze, Sharpening Pro, Noise Reduction, Skin Tone Uniformity, Color Qualifier (partial — uses local masks), Auto White Balance (content-adaptive — estimates the illuminant per image), Chromatic Aberration, Vignette, Lens Distortion, Perspective Correct, Lens Profile.
@@ -200,7 +201,7 @@ git clone https://github.com/jeremieLouvaert/ComfyUI-Darkroom.git
 pip install -r ComfyUI-Darkroom/requirements.txt
 ```
 
-Restart ComfyUI. All 51 nodes appear under **AKURATE/Darkroom/** with subcategories: Film (incl. Spectral), Raw, Grading (incl. Color Match), Lens, Pipeline, RAW, Scopes, Print.
+Restart ComfyUI. All 52 nodes appear under **AKURATE/Darkroom/** with subcategories: Film (incl. Spectral), Raw, Grading (incl. Color Match), Lens, Pipeline, RAW, Scopes, Print.
 
 ### Dependencies
 
