@@ -140,7 +140,7 @@ The baker is vendored at `third_party/spectral_film_lut/` (MIT, JanLohse/spectra
 
 | Node | Description |
 |------|-------------|
-| **Halftone** | AM clustered-dot halftone screening, the newsprint / comic look. Reproduces continuous tone as a grid of round ink dots whose size grows with tone. Mono (black-on-white, single angle) or color (naive CMYK separation screened at the standard rosette angles 15/75/0/45 so it makes a real rosette). Resolution-independent screen frequency (lines across the long edge), supersampled dot edges, GCR control for CMYK, strength blend for a subtle screen overlay. GPU-accelerated. This is a stylize effect, not a calibrated proof (use CMYK Soft-Proof for that). |
+| **Halftone** | Halftone screening, the newsprint / comic look. Reproduces continuous tone as a grid of ink dots whose size grows with tone. Four dot shapes (round, line for an engraving screen, square, ellipse for chain dots) and two methods: AM clustered dots (angled, with the standard CMYK rosette 15/75/0/45) or FM dispersed Bayer dither. Mono (black on white) or color (naive CMYK separation). Resolution-independent screen frequency (lines across the long edge), supersampled dot edges, GCR control, strength blend for a subtle screen overlay. Dot shapes are tone-linearized, so changing the shape changes the dot geometry, not the overall tone. GPU-accelerated. This is a stylize effect, not a calibrated proof (use CMYK Soft-Proof for that). |
 
 ### Pipeline — LUT & Color Management (7 nodes)
 
