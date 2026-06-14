@@ -1,6 +1,6 @@
 # ComfyUI-Darkroom
 
-Professional color grading and film emulation suite for ComfyUI — 49 nodes, 161 film stocks, 35 spectral neg×print LUTs, 102 lens profiles, reference-driven Color Match, colorist scopes, full CMYK print workflow, zero API costs.
+Professional color grading and film emulation suite for ComfyUI — 50 nodes, 161 film stocks, 35 spectral neg×print LUTs, 102 lens profiles, reference-driven Color Match, colorist scopes, full CMYK print workflow, zero API costs.
 
 The most complete color toolset in the ComfyUI ecosystem. From physics-based film emulation to DaVinci Resolve-level color grading, Camera Raw processing, optical simulation, LUT export, ACES color management, and magazine-ready CMYK print output — everything runs locally with no external dependencies.
 
@@ -18,11 +18,12 @@ The most complete color toolset in the ComfyUI ecosystem. From physics-based fil
 | **Print Stock** | Photographic paper simulation — the negative-to-print chain. |
 | **Cross Process** | E-6 in C-41 and C-41 in E-6 cross-processing color shifts. |
 
-### Camera Raw Tools (9 nodes)
+### Camera Raw Tools (10 nodes)
 
 | Node | Description |
 |------|-------------|
 | **White Balance** | Color temperature (Kelvin) and tint adjustment via Planckian locus approximation. |
+| **Auto White Balance** | Automatic color-cast removal by estimating the scene illuminant from the image (no temperature input). Four classical methods in one dropdown: Gray World, White Patch (Max-RGB), Shades of Gray (Minkowski norm, the robust default), and Gray Edge (gradient-based, often best). Corrects via a von Kries diagonal in linear light and preserves overall brightness. Strength blend. Pure numpy, no learned weights. A robust "remove the obvious cast" auto-WB, not a trained neural matcher. |
 | **Exposure & Tone** | EV-stop exposure, S-curve contrast, parametric shadows/highlights/whites/blacks. |
 | **HSL Selective** | Per-hue adjustments to hue, saturation, and luminance across 8 color bands with smooth feathering. |
 | **Clarity / Texture / Dehaze** | Local contrast enhancement, surface texture detail, and atmospheric haze removal. |
@@ -182,7 +183,7 @@ A 3D LUT is a per-pixel color lookup. It has no idea about neighboring pixels. S
 Film Stock (Color), Film Stock (B&W), Print Stock, Cross Process, White Balance, Exposure & Tone, HSL Selective, Vibrance, Tone Curve, Lift Gamma Gain, OkLab Color, Log Wheels, 3-Way Color Balance, Hue vs Hue, Hue vs Sat, Lum vs Sat, Sat vs Sat, Color Warper, Color Space Transform, ACES Tonemap, LUT Apply.
 
 **NOT allowed in the bake chain** (they use pixel neighborhoods and will corrupt the lattice):
-Film Grain, Film Grain Pro, Halftone, Halation, Clarity / Texture / Dehaze, Sharpening Pro, Noise Reduction, Skin Tone Uniformity, Color Qualifier (partial — uses local masks), Chromatic Aberration, Vignette, Lens Distortion, Perspective Correct, Lens Profile.
+Film Grain, Film Grain Pro, Halftone, Halation, Clarity / Texture / Dehaze, Sharpening Pro, Noise Reduction, Skin Tone Uniformity, Color Qualifier (partial — uses local masks), Auto White Balance (content-adaptive — estimates the illuminant per image), Chromatic Aberration, Vignette, Lens Distortion, Perspective Correct, Lens Profile.
 
 If you want spatial effects on your final image, apply them to `graded_photo` **after** Extract, not inside the bake chain.
 
@@ -198,7 +199,7 @@ git clone https://github.com/jeremieLouvaert/ComfyUI-Darkroom.git
 pip install -r ComfyUI-Darkroom/requirements.txt
 ```
 
-Restart ComfyUI. All 49 nodes appear under **AKURATE/Darkroom/** with subcategories: Film (incl. Spectral), Raw, Grading (incl. Color Match), Lens, Pipeline, RAW, Scopes, Print.
+Restart ComfyUI. All 50 nodes appear under **AKURATE/Darkroom/** with subcategories: Film (incl. Spectral), Raw, Grading (incl. Color Match), Lens, Pipeline, RAW, Scopes, Print.
 
 ### Dependencies
 

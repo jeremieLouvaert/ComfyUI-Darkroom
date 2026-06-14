@@ -11,6 +11,7 @@ from .lens_distortion import NODE_CLASS_MAPPINGS as LD, NODE_DISPLAY_NAME_MAPPIN
 from .perspective_correct import NODE_CLASS_MAPPINGS as PC, NODE_DISPLAY_NAME_MAPPINGS as PC_N
 from .lens_profile import NODE_CLASS_MAPPINGS as LP, NODE_DISPLAY_NAME_MAPPINGS as LP_N
 from .white_balance import NODE_CLASS_MAPPINGS as WB, NODE_DISPLAY_NAME_MAPPINGS as WB_N
+from .auto_white_balance import NODE_CLASS_MAPPINGS as AWB, NODE_DISPLAY_NAME_MAPPINGS as AWB_N
 from .exposure_tone import NODE_CLASS_MAPPINGS as ET, NODE_DISPLAY_NAME_MAPPINGS as ET_N
 from .hsl_selective import NODE_CLASS_MAPPINGS as HSL, NODE_DISPLAY_NAME_MAPPINGS as HSL_N
 from .clarity_texture_dehaze import NODE_CLASS_MAPPINGS as CTD, NODE_DISPLAY_NAME_MAPPINGS as CTD_N
@@ -55,5 +56,5 @@ from .cmyk_tac_check import NODE_CLASS_MAPPINGS as KTC, NODE_DISPLAY_NAME_MAPPIN
 from .cmyk_export import NODE_CLASS_MAPPINGS as KEX, NODE_DISPLAY_NAME_MAPPINGS as KEX_N
 from .halftone import NODE_CLASS_MAPPINGS as HT, NODE_DISPLAY_NAME_MAPPINGS as HT_N
 
-NODE_CLASS_MAPPINGS = {**FSC, **FSB, **FG, **FGP, **HAL, **PS, **CP, **CA, **VIG, **LD, **PC, **LP, **WB, **ET, **HSL, **CTD, **VIB, **SP, **NR, **STU, **CQ, **TC, **LGG, **LW, **TWCB, **HVH, **HVS, **LVS, **SVS, **CW, **OKL, **LI, **LE, **LA, **LBI, **LBE, **CST, **AT, **RL, **RMS, **SFS, **HIST, **VEC, **CM, **KSP, **KGW, **KTC, **KEX, **HT}
-NODE_DISPLAY_NAME_MAPPINGS = {**FSC_N, **FSB_N, **FG_N, **FGP_N, **HAL_N, **PS_N, **CP_N, **CA_N, **VIG_N, **LD_N, **PC_N, **LP_N, **WB_N, **ET_N, **HSL_N, **CTD_N, **VIB_N, **SP_N, **NR_N, **STU_N, **CQ_N, **TC_N, **LGG_N, **LW_N, **TWCB_N, **HVH_N, **HVS_N, **LVS_N, **SVS_N, **CW_N, **OKL_N, **LI_N, **LE_N, **LA_N, **LBI_N, **LBE_N, **CST_N, **AT_N, **RL_N, **RMS_N, **SFS_N, **HIST_N, **VEC_N, **CM_N, **KSP_N, **KGW_N, **KTC_N, **KEX_N, **HT_N}
+NODE_CLASS_MAPPINGS = {**FSC, **FSB, **FG, **FGP, **HAL, **PS, **CP, **CA, **VIG, **LD, **PC, **LP, **WB, **AWB, **ET, **HSL, **CTD, **VIB, **SP, **NR, **STU, **CQ, **TC, **LGG, **LW, **TWCB, **HVH, **HVS, **LVS, **SVS, **CW, **OKL, **LI, **LE, **LA, **LBI, **LBE, **CST, **AT, **RL, **RMS, **SFS, **HIST, **VEC, **CM, **KSP, **KGW, **KTC, **KEX, **HT}
+NODE_DISPLAY_NAME_MAPPINGS = {**FSC_N, **FSB_N, **FG_N, **FGP_N, **HAL_N, **PS_N, **CP_N, **CA_N, **VIG_N, **LD_N, **PC_N, **LP_N, **WB_N, **AWB_N, **ET_N, **HSL_N, **CTD_N, **VIB_N, **SP_N, **NR_N, **STU_N, **CQ_N, **TC_N, **LGG_N, **LW_N, **TWCB_N, **HVH_N, **HVS_N, **LVS_N, **SVS_N, **CW_N, **OKL_N, **LI_N, **LE_N, **LA_N, **LBI_N, **LBE_N, **CST_N, **AT_N, **RL_N, **RMS_N, **SFS_N, **HIST_N, **VEC_N, **CM_N, **KSP_N, **KGW_N, **KTC_N, **KEX_N, **HT_N}
