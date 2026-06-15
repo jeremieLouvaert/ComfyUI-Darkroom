@@ -24,4 +24,4 @@ def _warm_cuda():
 
 _warm_cuda()
 
-print("\033[34m[ComfyUI-Darkroom] \033[92mLoaded — 53 nodes (Film Emulation + Camera Raw + Color Grading + Lens & Optics + LUT Pipeline + RAW Pipeline w/ DCP + Spectral Film Stock + Scopes + Color Match + CMYK Print)\033[0m")
+print("\033[34m[ComfyUI-Darkroom] \033[92mLoaded — 54 nodes (Film Emulation + Camera Raw + Color Grading + Lens & Optics + LUT Pipeline + RAW Pipeline w/ DCP + Spectral Film Stock + Scopes + Color Match + CMYK Print)\033[0m")

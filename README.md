@@ -1,6 +1,6 @@
 # ComfyUI-Darkroom
 
-Professional color grading and film emulation suite for ComfyUI — 53 nodes, 161 film stocks, 35 spectral neg×print LUTs, 102 lens profiles, reference-driven Color Match, colorist scopes, full CMYK print workflow, zero API costs.
+Professional color grading and film emulation suite for ComfyUI — 54 nodes, 161 film stocks, 35 spectral neg×print LUTs, 102 lens profiles, reference-driven Color Match, colorist scopes, full CMYK print workflow, zero API costs.
 
 The most complete color toolset in the ComfyUI ecosystem. From physics-based film emulation to DaVinci Resolve-level color grading, Camera Raw processing, optical simulation, LUT export, ACES color management, and magazine-ready CMYK print output — everything runs locally with no external dependencies.
 
@@ -20,6 +20,7 @@ The most complete color toolset in the ComfyUI ecosystem. From physics-based fil
 | **Adjacency Acutance** | Film development edge effects (Mackie lines): a density overshoot on the bright side of an edge and an undershoot on the dark side, the organic 3D acutance of large-format film rather than digital over-sharpening. Asymmetric and edge-localized, with an asymmetry control (1 = symmetric, higher = filmic). Optional bromide drag adds the density-minus streaks that trail from bright areas in the direction of gravity or tank agitation. Derived from a published reaction-diffusion edge-effect model (implemented as the cheaper chemical-spread convolution). Physically inspired, not per-film calibrated. |
 | **Reciprocity Failure** | Simulates film reciprocity failure (the Schwarzschild effect) at long exposures: the per-channel color cast that no digital sensor has, plus crushed shadows. Pick a film and an exposure time and the long-exposure character is applied from the manufacturer datasheet corrections (Kodak E-31 and Fuji datasheets). Six stocks: B&W general, T-Max, Portra 400, Ektachrome E100 (cyan/blue cast), Provia 100F (magenta), Velvia 50 (green). Datasheet-character-grounded, not per-roll calibrated; film aging is a separate concern. |
 | **Spectral B&W (Ortho/Pan)** | Black and white conversion driven by a film's spectral sensitivity. Orthochromatic renders red dark and blue light (white skies, dark skin and lips), panchromatic is natural, and an extended-red mode lightens reds and foliage. Five sensitivity types. The RGB weights are derived from real spectral sensitivity curves integrated against the Mallett-Yuksel sRGB spectral basis, a principled channel mixer rather than hand-picked numbers. An sRGB image cannot carry a real spectrum, so this is a spectral approximation of the ortho/pan tonal character. |
+| **Sabattier** | The Sabattier effect (partial solarization): a re-exposure mid-development fogs the unshielded highlights, folding them back dark while the deep shadows hold — the classic tonal reversal. Bright Mackie lines trace the contours, composed from the Adjacency Acutance kernel. A re-exposure depth and a shield control set how much of the highlights reverse and how sharply; the look is most dramatic on high-key images. The non-monotonic reversal is physically grounded (silver shielding, densities add while reflectance is logarithmic); the printing renormalization and Mackie composition are tuned to the look, not per-developer calibrated. |
 
 ### Camera Raw Tools (10 nodes)
 
@@ -186,7 +187,7 @@ A 3D LUT is a per-pixel color lookup. It has no idea about neighboring pixels. S
 Film Stock (Color), Film Stock (B&W), Print Stock, Cross Process, Reciprocity Failure, Spectral B&W (Ortho/Pan), White Balance, Exposure & Tone, HSL Selective, Vibrance, Tone Curve, Lift Gamma Gain, OkLab Color, Log Wheels, 3-Way Color Balance, Hue vs Hue, Hue vs Sat, Lum vs Sat, Sat vs Sat, Color Warper, Color Space Transform, ACES Tonemap, LUT Apply.
 
 **NOT allowed in the bake chain** (they use pixel neighborhoods and will corrupt the lattice):
-Film Grain, Film Grain Pro, Halftone, Adjacency Acutance, Halation, Clarity / Texture / Dehaze, Sharpening Pro, Noise Reduction, Skin Tone Uniformity, Color Qualifier (partial — uses local masks), Auto White Balance (content-adaptive — estimates the illuminant per image), Chromatic Aberration, Vignette, Lens Distortion, Perspective Correct, Lens Profile.
+Film Grain, Film Grain Pro, Halftone, Adjacency Acutance, Sabattier, Halation, Clarity / Texture / Dehaze, Sharpening Pro, Noise Reduction, Skin Tone Uniformity, Color Qualifier (partial — uses local masks), Auto White Balance (content-adaptive — estimates the illuminant per image), Chromatic Aberration, Vignette, Lens Distortion, Perspective Correct, Lens Profile.
 
 If you want spatial effects on your final image, apply them to `graded_photo` **after** Extract, not inside the bake chain.
 
@@ -202,7 +203,7 @@ git clone https://github.com/jeremieLouvaert/ComfyUI-Darkroom.git
 pip install -r ComfyUI-Darkroom/requirements.txt
 ```
 
-Restart ComfyUI. All 53 nodes appear under **AKURATE/Darkroom/** with subcategories: Film (incl. Spectral), Raw, Grading (incl. Color Match), Lens, Pipeline, RAW, Scopes, Print.
+Restart ComfyUI. All 54 nodes appear under **AKURATE/Darkroom/** with subcategories: Film (incl. Spectral), Raw, Grading (incl. Color Match), Lens, Pipeline, RAW, Scopes, Print.
 
 ### Dependencies
 
