@@ -14,6 +14,10 @@ Teeth (per docs/spectral-bw-derivation.md):
   4. NEUTRAL PRESERVED           — grey 0.5 in -> ~grey 0.5 out.
   5. WEIGHTS SANE                — >=0, sum~1, ortho wr<0.05, Pan+ wr is max.
   6. strength                    — 0 -> identity; 0.5 -> partial desaturation.
+  7. MEASURED PAN-RANGE           — Tri-X / 5222 wr in (0.15, Pan+ wr); sane weights.
+  8. MEASURED ORDERING            — Tri-X / 5222 red-gray strictly between Ortho and Pan+.
+  9. MEASURED BLUER THAN ANALYTIC PAN + NEGATIVE CONTROL (flipped Tri-X weights).
+  10. MEASURED NEUTRAL PRESERVED  — grey 0.5 in -> ~0.5 out, for both new stocks.
 """
 
 import os
@@ -213,6 +217,71 @@ c_in, c_full, c_half = chroma(colored), chroma(full), chroma(half)
 partial = (c_full < c_half < c_in)
 check("strength=0.5 -> chroma between full-B&W and full-color", partial,
       f"chroma in={c_in:.4f}  half={c_half:.4f}  full={c_full:.4f}")
+
+# ---------------------------------------------------------------------------
+# 7. MEASURED PAN-RANGE
+# ---------------------------------------------------------------------------
+print("\n[7] MEASURED PAN-RANGE: Tri-X / 5222 wr in (0.15, Pan+ wr); weights sane")
+MEASURED = ["Kodak Tri-X 400", "Kodak 5222 (Double-X)"]
+panplus_wr = _WEIGHTS["Panchromatic+"][0]
+for t in MEASURED:
+    w = _WEIGHTS[t]
+    check(f"{t}: 0.15 < wr < Pan+ wr ({panplus_wr:.6f})",
+          0.15 < w[0] < panplus_wr, f"wr={w[0]:.6f}")
+    check(f"{t}: all >=0 and sum~1 (within 1e-4)",
+          all(x >= 0 for x in w) and abs(sum(w) - 1.0) < 1e-4,
+          f"w={tuple(round(x,6) for x in w)}  sum={sum(w):.6f}")
+
+# ---------------------------------------------------------------------------
+# 8. MEASURED ORDERING
+# ---------------------------------------------------------------------------
+print("\n[8] MEASURED ORDERING: Tri-X / 5222 red-gray strictly between "
+      "Orthochromatic (darker) and Panchromatic+ (lighter)")
+red_ortho2 = gray_value(run(RED, sensitivity="Orthochromatic", strength=1.0))
+red_panplus = gray_value(run(RED, sensitivity="Panchromatic+", strength=1.0))
+red_measured = {}
+for t in MEASURED:
+    red_measured[t] = gray_value(run(RED, sensitivity=t, strength=1.0))
+    check(f"{t}: ortho red < {t} red < pan+ red",
+          red_ortho2 < red_measured[t] < red_panplus,
+          f"ortho={red_ortho2:.4f}  {t}={red_measured[t]:.4f}  pan+={red_panplus:.4f}")
+check("5222 red-gray <= Tri-X red-gray (5222 has lower wr)",
+      red_measured["Kodak 5222 (Double-X)"] <= red_measured["Kodak Tri-X 400"],
+      f"5222={red_measured['Kodak 5222 (Double-X)']:.4f}  "
+      f"Tri-X={red_measured['Kodak Tri-X 400']:.4f}")
+
+# ---------------------------------------------------------------------------
+# 9. MEASURED BLUER THAN ANALYTIC PAN + NEGATIVE CONTROL
+# ---------------------------------------------------------------------------
+print("\n[9] MEASURED BLUER THAN ANALYTIC PAN: both new stocks render blue LIGHTER "
+      "and red DARKER than Panchromatic (film-true signature)")
+blue_pan = gray_value(run(BLUE, sensitivity="Panchromatic", strength=1.0))
+red_pan = gray_value(run(RED, sensitivity="Panchromatic", strength=1.0))
+for t in MEASURED:
+    blue_t = gray_value(run(BLUE, sensitivity=t, strength=1.0))
+    red_t = red_measured[t]
+    check(f"{t}: blue gray > Panchromatic blue gray", blue_t > blue_pan,
+          f"{t} blue={blue_t:.4f}  pan blue={blue_pan:.4f}")
+    check(f"{t}: red gray < Panchromatic red gray", red_t < red_pan,
+          f"{t} red={red_t:.4f}  pan red={red_pan:.4f}")
+
+print("    negative control: flipped weights (swap wr<->wb) on Kodak Tri-X 400 "
+      "must break the blue-lighter signature")
+wr_tx, wg_tx, wb_tx = _WEIGHTS["Kodak Tri-X 400"]
+flipped_tx = (wb_tx, wg_tx, wr_tx)
+blue_flip_tx = gray_value(convert_with_weights(BLUE, flipped_tx))
+neg_fired_tx = not (blue_flip_tx > blue_pan)
+check("NEGATIVE CONTROL fired (flipped Tri-X weights: blue no longer lighter than pan)",
+      neg_fired_tx, f"blue_flip={blue_flip_tx:.4f}  pan_blue={blue_pan:.4f}")
+
+# ---------------------------------------------------------------------------
+# 10. MEASURED NEUTRAL PRESERVED
+# ---------------------------------------------------------------------------
+print("\n[10] MEASURED NEUTRAL PRESERVED: grey 0.5 in -> ~0.5 out (Tri-X, 5222)")
+for t in MEASURED:
+    g_out = gray_value(run(grey, sensitivity=t, strength=1.0))
+    check(f"{t}: grey 0.5 -> ~0.5 (within 0.02)", abs(g_out - 0.5) < 0.02,
+          f"out={g_out:.4f}")
 
 # ---------------------------------------------------------------------------
 print("\n" + ("ALL CHECKS PASSED" if PASS else "SOME CHECKS FAILED"))

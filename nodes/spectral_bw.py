@@ -15,6 +15,13 @@ HONEST LIMIT: a true B&W weight is integral(S*I); sRGB gives 3 numbers per pixel
 the spectrum I(lambda). This is the spectral-upsampling approximation every spectral
 renderer makes — ortho/pan TONAL CHARACTER, not a claim of reproducing what the film
 did to a real-world spectrum. Pan+ is the most stylized (sRGB carries no IR).
+
+v1.x adds two MEASURED stocks (Kodak Tri-X 400, Kodak 5222/Double-X): real
+datasheet-digitized spectral sensitivity curves, sourced from the vendored
+third_party/spectral_film_lut (Jan Lohse, MIT), run through the same offline
+Mallett-Yuksel integration as the analytic types (tools/derive_spectral_bw_weights.py
+section 2b). Same honest limit applies: measured sensitivity through the same sRGB
+spectral-upsampling approximation — tonal character, not a real-spectrum claim.
 """
 
 import numpy as np
@@ -32,6 +39,13 @@ _WEIGHTS = {
     "Orthopanchromatic": (0.162394, 0.453700, 0.383906),
     "Panchromatic": (0.284952, 0.389573, 0.325476),
     "Panchromatic+": (0.382438, 0.338749, 0.278813),
+
+    # v1.x MEASURED stocks — datasheet-digitized spectral sensitivity from the
+    # vendored third_party/spectral_film_lut (Jan Lohse, MIT). Derived offline
+    # by the same Mallett-Yuksel integration as the analytic types; see
+    # tools/derive_spectral_bw_weights.py section 2b.
+    "Kodak Tri-X 400": (0.210565, 0.357127, 0.432308),
+    "Kodak 5222 (Double-X)": (0.176784, 0.312235, 0.510981),
 }
 
 _SENSITIVITY_NAMES = list(_WEIGHTS.keys())
@@ -48,7 +62,11 @@ class SpectralBW:
                     "default": "Panchromatic",
                     "tooltip": "Film's spectral 'eye'. Orthochromatic darkens red / "
                                "lightens blue (white skies); Panchromatic is natural; "
-                               "Panchromatic+ is pseudo-IR (reds/foliage/skin light)."
+                               "Panchromatic+ is pseudo-IR (reds/foliage/skin light). "
+                               "Kodak Tri-X 400 / 5222 (Double-X) are MEASURED stocks "
+                               "(real datasheet-digitized sensitivity) — bluer than the "
+                               "idealized Panchromatic: skies lighter, reds/skin darker, "
+                               "film-true."
                 }),
                 "strength": ("FLOAT", {
                     "default": 1.0, "min": 0.0, "max": 1.0, "step": 0.05,

@@ -97,7 +97,75 @@ This IS LUT-bakeable (pointwise, fixed weights) → add to the bake-allowed list
    Pan+ `w_r` largest. (Assert on the derived constants.)
 6. **strength=0 → identity; strength=0.5 → partial desaturation** (chroma reduced, not zero).
 
-## Deferred (v1.x)
-Real vendored Tri-X/5222 sensitivity curves (vs analytic); a colored-filter control
-(red/yellow/green filter over B&W = the classic darkroom contrast tool — actually a nice
-add); true IR (needs IR data we don't have from sRGB).
+## v1.x — measured Tri-X / 5222 curves (SHIPPED 2026-07-17)
+
+Two new `sensitivity` entries, `"Kodak Tri-X 400"` and `"Kodak 5222 (Double-X)"`, swap
+the analytic S(λ) window for a REAL datasheet-digitized spectral sensitivity curve.
+Same runtime model, same offline-derivation pipeline (§ "Offline derivation of the
+weights" above) — only the input curve changes.
+
+**Source + license.** The measured curves come from the vendored
+`third_party/spectral_film_lut` (Jan Lohse, MIT license; see `third_party/
+spectral_film_lut/ATTRIBUTION.md`). Each stock module stores its curve as a
+`log_sensitivity = [{wavelength_nm: log10(S)}]` literal on a `FilmData(...)` call.
+
+**Extraction method.** `tools/derive_spectral_bw_weights.py` § 2b (`_load_measured_points`)
+AST-parses the stock module and `ast.literal_eval`s the `log_sensitivity` keyword —
+it does NOT import or execute the vendored package. Reason: the vendored `__init__`
+pulls in `numba`, which is incompatible with the embedded numpy in this environment,
+and the stock module itself calls `dataclasses.replace` against the real `FilmData`
+class at import time. Literal extraction sidesteps both without touching vendored
+runtime code.
+
+**Alignment policy** (`measured_S_on_grid`): linearize `S = 10**log_sensitivity`;
+resample onto the Mallett-Yuksel wavelength grid with linear interpolation INSIDE the
+measured range, and linear extrapolation of the LOG-sensitivity (not linear S) beyond
+both ends — the measured curves fall off steeply in log space near the shoulders, so
+log-domain extrapolation decays smoothly instead of cliffing to zero or blowing up.
+The curve is peak-normalized (`S / S.max()`) before integration; this is cosmetic only
+— the absolute scale cancels in the sum-to-1 normalization at the end. Integration
+against the Mallett-Yuksel basis and the sum-1 normalization are IDENTICAL to the
+analytic pipeline (`derive()`).
+
+**Derived triples** (verbatim from `tools/derive_spectral_bw_weights.py`, copied into
+`nodes/spectral_bw.py::_WEIGHTS`):
+```
+"Kodak Tri-X 400":       (0.210565, 0.357127, 0.432308)
+"Kodak 5222 (Double-X)": (0.176784, 0.312235, 0.510981)
+```
+
+**Validation.**
+- Pan-range check: both `w_r` values sit strictly between 0.15 and Panchromatic+'s
+  `w_r` (0.382438) — plausible modern-pan territory, not ortho, not pseudo-IR.
+- Red-patch ordering: both stocks render a pure-red patch strictly between the
+  Orthochromatic gray (darkest) and the Panchromatic+ gray (lightest); 5222 (lower
+  `w_r`) renders red darker than or equal to Tri-X, matching the curve shapes.
+- Negative control (reversed-curve): re-deriving 5222 with its `log_sensitivity`
+  points reversed across wavelength shifts the weight triple by up to 0.2932 (max
+  abs component shift) — proof the measured data is actually driving the result, not
+  an artifact of the pipeline plumbing.
+- 5222-bluer-than-Tri-X: 5222's lower `w_r` / higher `w_b` vs Tri-X tracks the two
+  stocks' real curve shapes (5222 is the more blue-weighted cine stock of the pair).
+
+**The film-true story.** Both measured stocks render BLUER than the idealized analytic
+"Panchromatic" curve — larger `w_b`, smaller `w_r` — because real panchromatic film
+sensitivity is not flat across the visible range the way the v1 analytic window
+assumes; it tapers into the red. This is exactly why photographers shot yellow (or
+red) filters over pan film: to correct the film's native blue-heavy response back
+toward how the eye perceives contrast (darker skies, more natural skin tones). The
+measured entries make that historical filter practice visible for the first time in
+this node — skies render lighter and reds/skin render darker than the idealized
+"Panchromatic" preset, which is the correct, film-true direction.
+
+**Honest limit (unchanged in kind, restated for measured data).** These weights are
+still a real measured S(λ) run through the SAME sRGB spectral-upsampling
+approximation as the analytic types (§ "What this is (and the honest limit)" above).
+Measuring the real sensitivity curve does not remove the metamerism problem — sRGB
+still gives only 3 numbers per pixel, not the scene's spectrum. So "measured" upgrades
+the INPUT curve's fidelity, not the overall claim: still tonal character, not a
+reproduction of what Tri-X or 5222 did to a real-world spectrum.
+
+## Still deferred (v1.2+)
+- Colored-filter control (red/yellow/green filter over B&W) — the classic darkroom
+  contrast tool; a nice complement to the measured stocks above.
+- True IR — needs IR data sRGB does not carry; no path without a different input.

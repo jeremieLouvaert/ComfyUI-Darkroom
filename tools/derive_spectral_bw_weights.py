@@ -120,6 +120,75 @@ TYPES = {
 
 
 # ---------------------------------------------------------------------------
+# 2b. v1.x MEASURED stocks — real datasheet-digitized sensitivity curves from
+#     the vendored third_party/spectral_film_lut (Jan Lohse, MIT; see
+#     ATTRIBUTION.md). Data format: log_sensitivity = [{wavelength_nm: log10}].
+#     Policy: linearize S = 10**log_sens; align to the basis grid with linear
+#     interpolation INSIDE the measured range and linear extrapolation of
+#     LOG-sensitivity beyond both ends (same alignment family the vendored
+#     engine itself uses; the measured red shoulders are steeply negative in
+#     log space, so extrapolation decays smoothly instead of cliffing).
+#     Absolute scale cancels in the sum-to-1 normalization.
+# ---------------------------------------------------------------------------
+import os
+import sys
+
+_REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_SFL_SRC = os.path.join(_REPO, "third_party", "spectral_film_lut", "src")
+
+
+def _load_measured_points(module_relpath):
+    """Extract the measured `log_sensitivity` dict from a vendored stock module
+    WITHOUT executing any vendored code: the data is a pure float-dict literal,
+    so we AST-parse the file and literal_eval the `log_sensitivity=` keyword of
+    the FilmData(...) call. (Executing the module is not an option here — the
+    vendored package __init__ pulls numba, incompatible with the embedded
+    numpy, and the module calls dataclasses.replace on the real FilmData.)"""
+    import ast
+
+    path = os.path.join(_SFL_SRC, "spectral_film_lut", "bw_negative_film",
+                        module_relpath)
+    with open(path, "r", encoding="utf-8") as f:
+        tree = ast.parse(f.read())
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            for kw in node.keywords:
+                if kw.arg == "log_sensitivity":
+                    ls = ast.literal_eval(kw.value)
+                    points = ls[0] if isinstance(ls, list) else ls
+                    lam = np.array(sorted(points), dtype=np.float64)
+                    logv = np.array([points[l] for l in lam], dtype=np.float64)
+                    if len(lam) < 10:
+                        raise RuntimeError(
+                            f"suspiciously few points ({len(lam)}) in {path}")
+                    return lam, logv
+    raise RuntimeError(f"no log_sensitivity literal found in {path}")
+
+
+def measured_S_on_grid(lam, logv, wl_grid):
+    """log-linear interpolate inside the measured range, linear-extrapolate
+    log-sensitivity beyond both ends, then linearize."""
+    logS = np.interp(wl_grid, lam, logv)
+    left = wl_grid < lam[0]
+    if left.any():
+        slope = (logv[1] - logv[0]) / (lam[1] - lam[0])
+        logS[left] = logv[0] + slope * (wl_grid[left] - lam[0])
+    right = wl_grid > lam[-1]
+    if right.any():
+        slope = (logv[-1] - logv[-2]) / (lam[-1] - lam[-2])
+        logS[right] = logv[-1] + slope * (wl_grid[right] - lam[-1])
+    S = 10.0 ** logS
+    return S / S.max()          # scale cancels in normalization; keep prints sane
+
+
+MEASURED_STOCKS = {
+    "Kodak Tri-X 400": "kodak_trix_400.py",
+    "Kodak 5222 (Double-X)": "kodak_5222.py",
+}
+
+
+# ---------------------------------------------------------------------------
 # 3. w_c = trapz(S * b_c, lambda); normalize so sum(w) = 1.
 # ---------------------------------------------------------------------------
 # NumPy 2.x renamed trapz -> trapezoid; keep a fallback for older numpy.
@@ -144,6 +213,31 @@ for name, S_fn in TYPES.items():
     results[name] = w
     print(f"  {name:18s}  w_r={w[0]:.6f}  w_g={w[1]:.6f}  w_b={w[2]:.6f}  sum={w.sum():.6f}")
 
+print("\n=== v1.x MEASURED stocks (vendored spectral_film_lut, MIT) ===")
+measured_results = {}
+for name, relpath in MEASURED_STOCKS.items():
+    lam, logv = _load_measured_points(relpath)
+    S = measured_S_on_grid(lam, logv, wl)
+    w_r = _trapz(S * b_r, wl)
+    w_g = _trapz(S * b_g, wl)
+    w_b = _trapz(S * b_b, wl)
+    w = np.clip(np.array([w_r, w_g, w_b]), 0.0, None)
+    w = w / w.sum()
+    measured_results[name] = w
+    results[name] = w
+    print(f"  {name:22s}  w_r={w[0]:.6f}  w_g={w[1]:.6f}  w_b={w[2]:.6f}  "
+          f"(measured {lam[0]:.0f}-{lam[-1]:.0f} nm, {len(lam)} pts)")
+
+# Negative control: a mangled curve (log values reversed across wavelength)
+# must move the weights materially — proves the data actually drives the result.
+_lam5222, _logv5222 = _load_measured_points(MEASURED_STOCKS["Kodak 5222 (Double-X)"])
+_S_mangled = measured_S_on_grid(_lam5222, _logv5222[::-1], wl)
+_wm = np.clip(np.array([_trapz(_S_mangled * b, wl) for b in (b_r, b_g, b_b)]), 0.0, None)
+_wm = _wm / _wm.sum()
+_shift = np.abs(_wm - measured_results["Kodak 5222 (Double-X)"]).max()
+print(f"  NEGATIVE CONTROL (reversed 5222 curve): max weight shift {_shift:.4f} "
+      f"{'OK (fires)' if _shift > 0.05 else 'FAIL (data not driving result!)'}")
+
 
 # ---------------------------------------------------------------------------
 # 4. Sanity (per the spec) before trusting.
@@ -159,7 +253,14 @@ print(f"  Pan+ w_r is the largest : {panplus_wr:.6f}  (max over types={max(all_w
       f"{'OK' if panplus_is_max else 'FAIL'}")
 print(f"  Pan more balanced than ortho/pan+ (info): pan w={tuple(round(float(x),3) for x in results['Panchromatic'])}")
 
-if ortho_wr >= 0.05 or not panplus_is_max:
+measured_ok = True
+for name, w in measured_results.items():
+    pan_like = 0.15 < w[0] < results["Panchromatic+"][0]
+    measured_ok &= pan_like
+    print(f"  {name}: pan-range w_r (0.15 < {w[0]:.4f} < Pan+ {results['Panchromatic+'][0]:.4f})"
+          f"  {'OK' if pan_like else 'FAIL'}")
+
+if ortho_wr >= 0.05 or not panplus_is_max or not measured_ok:
     print("\n!!! SANITY VIOLATION — do NOT use these weights; the S(lambda) shapes need revisiting.")
 
 
