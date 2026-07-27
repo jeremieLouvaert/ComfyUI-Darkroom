@@ -1,15 +1,16 @@
 # ComfyUI-Darkroom
 
-Professional color grading and film emulation suite for ComfyUI — 54 nodes, 161 film stocks, 35 spectral neg×print LUTs, 102 lens profiles, reference-driven Color Match, colorist scopes, full CMYK print workflow, zero API costs.
+Professional color grading and film emulation suite for ComfyUI — 55 nodes, 161 film stocks, 35 spectral neg×print LUTs, 102 lens profiles, reference-driven Color Match, colorist scopes, full CMYK print workflow, zero API costs.
 
 The most complete color toolset in the ComfyUI ecosystem. From physics-based film emulation to DaVinci Resolve-level color grading, Camera Raw processing, optical simulation, LUT export, ACES color management, and magazine-ready CMYK print output — everything runs locally with no external dependencies.
 
 ## Nodes
 
-### Film Emulation (10 nodes)
+### Film Emulation (11 nodes)
 
 | Node | Description |
 |------|-------------|
+| **Film Rebate** | Format-correct procedural film borders: sprockets, edge printing, notch codes, Polaroid/slide frames, filed-carrier print border. Canvas-extending (composes the input into a larger film/print canvas and outputs a MASK marking where the image landed). Seven formats: 135 full frame (KS-1870 perforations, dual frame numbering, optional stylized DX bars), 135 filed carrier (the Cartier-Bresson full-negative look, seeded jagged black border), 120 6x6/6x9, 4x5 sheet (F-3-style notch code selected by stock name), Polaroid integral (dims re-verified against Polaroid's own support figures), and 35mm slide mount. Rebate polarity (B&W neg / Color neg / Reversal) drives the film-format border color, fill/fit compose modes handle the aspect mismatch, and every mm dimension is resolution-independent by construction. |
 | **Film Stock (Color)** | 111 color film stocks with per-channel H&D characteristic curves. Kodak Portra, Ektar, Fuji Velvia, Cinestill, Polaroid, and more. Capture One curve data integration. |
 | **Film Stock (B&W)** | 50 B&W stocks with real spectral sensitivity coefficients. Ilford HP5+, Kodak Tri-X, T-MAX, with pushed variants. |
 | **Film Grain** | Multi-octave luminance-dependent grain. ISO-scaled, resolution-aware, blue-channel emphasis like real film. |
@@ -203,7 +204,7 @@ git clone https://github.com/jeremieLouvaert/ComfyUI-Darkroom.git
 pip install -r ComfyUI-Darkroom/requirements.txt
 ```
 
-Restart ComfyUI. All 54 nodes appear under **AKURATE/Darkroom/** with subcategories: Film (incl. Spectral), Raw, Grading (incl. Color Match), Lens, Pipeline, RAW, Scopes, Print.
+Restart ComfyUI. All 55 nodes appear under **AKURATE/Darkroom/** with subcategories: Film (incl. Spectral), Raw, Grading (incl. Color Match), Lens, Pipeline, RAW, Scopes, Print.
 
 ### Dependencies
 
