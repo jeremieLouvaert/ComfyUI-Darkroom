@@ -6,11 +6,12 @@ The most complete color toolset in the ComfyUI ecosystem. From physics-based fil
 
 ## Nodes
 
-### Film Emulation (11 nodes)
+### Film Emulation (12 nodes)
 
 | Node | Description |
 |------|-------------|
 | **Film Rebate** | Format-correct procedural film borders: sprockets, edge printing, notch codes, Polaroid/slide frames, filed-carrier print border. Canvas-extending (composes the input into a larger film/print canvas and outputs a MASK marking where the image landed). Seven formats: 135 full frame (KS-1870 perforations, dual frame numbering, optional stylized DX bars), 135 filed carrier (the Cartier-Bresson full-negative look, seeded jagged black border), 120 6x6/6x9, 4x5 sheet (F-3-style notch code selected by stock name), Polaroid integral (dims re-verified against Polaroid's own support figures), and 35mm slide mount. Rebate polarity (B&W neg / Color neg / Reversal) drives the film-format border color, fill/fit compose modes handle the aspect mismatch, and every mm dimension is resolution-independent by construction. |
+| **Film Damage** | Dust, dirt, hairs and scratches in one node, with the sign and colour of every defect derived from where it sits in the imaging chain rather than picked as paint. A defect is an optical event at a plane, so it applies a constant density offset: set `defect_origin` to negative and dust blocks the printing light and comes out WHITE; set it to positive (scanner glass, a print, a slide) and the same field reads dark. On the same negative a base-side scratch is a refractive groove that prints white, while an emulsion-side gouge removes dye layers top-down, so one `scratch_depth` control walks yellow to red to black on C-41 and blue to cyan to white on reversal. Scratches follow the film transport axis with bounded lateral wander and Kokaram-style diffraction shoulders; defect counts and sizes are gamma-distributed after the Ivanova et al. (CGF 2023) method, with sizes anchored to real particle scale. Outputs the image plus a MASK of the defect field for restoration or inpainting graphs. Fully procedural and seeded: no scan plates, no overlay PNGs. |
 | **Film Stock (Color)** | 111 color film stocks with per-channel H&D characteristic curves. Kodak Portra, Ektar, Fuji Velvia, Cinestill, Polaroid, and more. Capture One curve data integration. |
 | **Film Stock (B&W)** | 50 B&W stocks with real spectral sensitivity coefficients. Ilford HP5+, Kodak Tri-X, T-MAX, with pushed variants. |
 | **Film Grain** | Multi-octave luminance-dependent grain. ISO-scaled, resolution-aware, blue-channel emphasis like real film. |
@@ -188,7 +189,7 @@ A 3D LUT is a per-pixel color lookup. It has no idea about neighboring pixels. S
 Film Stock (Color), Film Stock (B&W), Print Stock, Cross Process, Reciprocity Failure, Spectral B&W (Ortho/Pan), White Balance, Exposure & Tone, HSL Selective, Vibrance, Tone Curve, Lift Gamma Gain, OkLab Color, Log Wheels, 3-Way Color Balance, Hue vs Hue, Hue vs Sat, Lum vs Sat, Sat vs Sat, Color Warper, Color Space Transform, ACES Tonemap, LUT Apply.
 
 **NOT allowed in the bake chain** (they use pixel neighborhoods and will corrupt the lattice):
-Film Grain, Film Grain Pro, Halftone, Adjacency Acutance, Sabattier, Halation, Clarity / Texture / Dehaze, Sharpening Pro, Noise Reduction, Skin Tone Uniformity, Color Qualifier (partial — uses local masks), Auto White Balance (content-adaptive — estimates the illuminant per image), Chromatic Aberration, Vignette, Lens Distortion, Perspective Correct, Lens Profile.
+Film Grain, Film Grain Pro, Halftone, Adjacency Acutance, Sabattier, Halation, Film Damage, Clarity / Texture / Dehaze, Sharpening Pro, Noise Reduction, Skin Tone Uniformity, Color Qualifier (partial — uses local masks), Auto White Balance (content-adaptive — estimates the illuminant per image), Chromatic Aberration, Vignette, Lens Distortion, Perspective Correct, Lens Profile.
 
 If you want spatial effects on your final image, apply them to `graded_photo` **after** Extract, not inside the bake chain.
 
