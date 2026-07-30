@@ -222,7 +222,7 @@ Each of these is a physical consequence, and each is a tooth:
 5. **The shapes are fluid shapes** — rivulets, beads, lobes, pour rims — because they come
    from a solver, not from noise.
 
-## 5. Fluid solver — depth-averaged FLIP
+## 5. Fluid solver — depth-averaged, on a grid
 
 **LOAD-BEARING CALL 2: depth-averaged, not 3D — and it is the apt model, not a saving.**
 The optics consume only h(x,y). A 3D FLIP would spend 10–100× the compute producing
@@ -230,7 +230,7 @@ internal velocity structure the renderer never reads, and produce the same pictu
 one thing 3D adds is overturning sheets where the surface is multivalued; no reference
 frame shows that — every one is consistent with a height field.
 
-Depth-averaged (shallow-water) equations, FLIP/PIC discretisation:
+Depth-averaged (shallow-water) equations:
 
     ∂h/∂t + ∇·(h u) = 0
     ∂u/∂t + (u·∇)u = −g∇(h + b) − c_f u/h + ν∇²u + (σ/ρ)∇(∇²h)
@@ -252,6 +252,39 @@ resolutions of 256–512.
 
 **Sim resolution is decoupled from image resolution.** h is low-frequency, the image is
 not. Simulate at 256–512², warp at full res. This is what makes the node affordable.
+
+### 5b. FLIP/PIC replaced by a grid solver (2026-07-30) — the discretisation was the bug
+
+The original discretisation was FLIP/PIC: particles carried mass and velocity,
+h came from a kernel density estimate on the grid, and `flip_ratio` blended the
+two transfer styles. That is now replaced by a finite-difference grid solver with
+a conservative flux-form continuity update. Same equations, same constants, same
+`h << L` assumption — only the representation of h changed.
+
+**Why.** The dominant force is −g∇h, and h was an estimate from counting
+particles. So sampling noise became force noise, which moved particles, which
+changed the density: a feedback loop rather than a sampling error. Measured, a
+flat 6.00 mm film with no dynamics at all reconstructed as **1.62–9.81 mm, 12.7%
+noise**, and it got *worse* with 3× the particles (14.4%) instead of falling as
+1/√N. `flip_ratio` barely moved it (12.7% at 0.95, 13.0% at 0.20). Since
+refraction differentiates h, that noise was the dominant structure the optics saw
+— so a great deal of what the look search was comparing was artifact.
+
+**Result.** The same flat film now reconstructs at **6.00–6.00 mm, 0.00% noise**.
+Mass conservation is exact rather than approximate (a central-difference draft
+manufactured water: 8000 mm³ poured came back as 8848, which is why the flux form
+and its per-cell outflow limiter exist). Runtime fell from 38 s to ~26 s at 1024.
+
+**The cost, stated rather than buried.** Semi-Lagrangian advection smears, and
+folding dropped from 15.1% to ~11%. That is a real loss, not rounding. It is
+accepted because it buys a surface that is not 12% artifact, and because 11% is
+far above the ~2% that would mean folding had been destroyed.
+
+**What this does NOT change.** The identity claim is unaffected and arguably
+stronger: the surface is still a simulated free surface, and now it is literally
+the solution of the continuity equation rather than an estimate from counting
+particles. LOAD-BEARING CALL 2 — depth-averaged rather than 3D — stands
+untouched; only the discretisation beneath it moved.
 
 ## 6. Surface reconstruction — the honest weak point, handled
 

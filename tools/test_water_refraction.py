@@ -96,15 +96,22 @@ t_start = time.time()
 
 # --- I1 ---------------------------------------------------------------------
 print("\nI1  reflecting walls conserve water exactly")
-s1 = WR.ShallowWaterFLIP(20.0, 20.0, nx=48, seed=1, edge="wall")
-s1.prefill(4.0, 8000)
-s1.vol = 4.0 * 400.0 / 8000
-n0, v0 = s1.px.size, s1.volume_mm3()
+s1 = WR.GridShallowWater(20.0, 20.0, nx=48, seed=1, edge="wall")
+s1.prefill(4.0)
+v0 = s1.volume_mm3()
 for _ in range(80):
     s1.step()
-check("I1 no particle created or destroyed over 80 steps",
-      s1.px.size == n0 and abs(s1.volume_mm3() - v0) < PREC,
-      f"{n0} / {v0:.4f}mm3 -> {s1.px.size} / {s1.volume_mm3():.4f}mm3")
+rel = abs(s1.volume_mm3() - v0) / max(v0, 1e-12)
+check("I1 walls create and destroy no water over 80 steps", rel < 1e-9,
+      f"{v0:.6f} -> {s1.volume_mm3():.6f} mm3, rel {rel:.2e}")
+# The flux form exists because a central-difference draft manufactured water:
+# 8000 mm3 poured came back as 8848. This is that check, on a live pour.
+_v = 6.0
+_h, _sim = WR.simulate(20.0, 20.0, volume_ml=_v, nx=48, seed=1, sample_ms=40.0,
+                       pour_ms=40.0, sweep=0.0)
+_rel = abs(_sim.volume_mm3() - _v * 1000.0) / (_v * 1000.0)
+check("I1 a pour delivers exactly the volume it was asked for", _rel < 0.02,
+      f"poured {_v*1000:.0f}, present {_sim.volume_mm3():.0f} mm3, rel {_rel:.3f}")
 
 # --- I2 ---------------------------------------------------------------------
 print("\nI2  the capillary length is derived, not hardcoded")
@@ -159,15 +166,13 @@ check("I5 displacement is UPHILL, so a bead magnifies", min(uphill) > 0.999,
 
 # --- I6 ---------------------------------------------------------------------
 print("\nI6  the explicit CFL limit is respected")
-s2 = WR.ShallowWaterFLIP(20.0, 20.0, nx=48, seed=2)
-s2.prefill(4.0, 8000)
-s2.vol = 4.0 * 400.0 / 8000
+s2 = WR.GridShallowWater(20.0, 20.0, nx=48, seed=2)
+s2.prefill(4.0)
 worst = 0.0
 for _ in range(40):
-    hh, u, v = s2._p2g()
-    dt = s2.cfl_dt(hh, u, v)
-    lim = s2.dx / max(math.sqrt(s2.g_normal * max(float(hh.max()), 1e-6))
-                      + float(np.hypot(u, v).max()), 1e-9)
+    dt = s2.cfl_dt()
+    lim = s2.dx / max(math.sqrt(s2.g_normal * max(float(s2.h.max()), 1e-6))
+                      + float(np.hypot(s2.u, s2.v).max()), 1e-9)
     worst = max(worst, dt / lim)
     s2.step(dt)
 check("I6 dt stays under dx/(|u|+sqrt(gh))", worst <= 1.0 + 1e-12,
@@ -233,6 +238,18 @@ check("I10 MASK is (B,H,W) and in [0,1]",
 check("I10 batch frames share one surface when vary_per_frame is off",
       float((img_out[0] - img_out[1]).abs().max()) > 0.0 or True,
       "(frames differ only by content, surface is shared)")
+
+# --- I13 the defect that forced the grid rewrite -----------------------------
+print("\nI13  still water must reconstruct as still (the particle-noise defect)")
+_g = WR.GridShallowWater(40.0, 39.5, nx=112, seed=1, edge="wall")
+_g.prefill(6.0)
+for _ in range(20):
+    _g.step()
+_hf = _g.height()
+_noise = float(_hf.std() / max(_hf.mean(), 1e-12))
+check("I13 a flat 6.00mm film stays flat", _noise < 0.01,
+      f"h {_hf.min():.3f}..{_hf.max():.3f}mm, noise {100*_noise:.2f}% "
+      f"(the particle solver gave 1.62..9.81mm, 12.70%)")
 
 # --- I11/I12 the two live-reported bugs -------------------------------------
 # Both were found by Jeremie running the node, not by this suite, so both get a
