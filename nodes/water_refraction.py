@@ -33,8 +33,33 @@ SURFACES = [
     "standing pool (heavier, whole frame)",
     "dry screen (readable, large clear areas)",
 ]
-# mm of water already present. The pool depth is the EXP-10 value Jeremie picked as
-# the favourite; a free puddle caps near 4mm, so this one implies a tray or a bezel.
+
+# Cell size the solver needs, in mm. The capillary length is 2.727mm, so this is
+# ~10.9 cells across it -- the resolution at which a pool actually folds. Measured
+# on one pour: 7.6 cells gives 2.0% folding, 10.9 gives 20.2%.
+TARGET_DX_MM = 0.25
+AUTO_NX_MAX = 224            # past this the solver dominates the runtime entirely
+
+
+def auto_sim_resolution(field_width_mm):
+    """
+    Grid width that keeps the CELL SIZE physical, rather than keeping a number fixed.
+
+    dx = field_width / nx, and what decides whether the surface folds is dx against
+    the capillary length -- not the image resolution, which is measurably irrelevant
+    here (folding 33.3% / 31.3% / 33.3% at 512 / 762 / 1024 px on identical physics).
+
+    Holding nx fixed while the field width changes is a silent trap: at nx = 160,
+    folding runs 57.7% at a 20mm field, 31.3% at 40mm and 2.4% at 80mm, purely
+    because dx coarsens from 0.125mm to 0.5mm. Nothing tells the user their folds
+    left. Deriving nx from the field width removes that.
+    """
+    nx = int(round(float(field_width_mm) / TARGET_DX_MM))
+    return max(64, min(nx, AUTO_NX_MAX))
+
+
+# mm of water already present. The pool depth is the EXP-10 value Jeremie picked
+# as the favourite; a free puddle caps near 4mm, so this implies a tray or bezel.
 SURFACE_FILM_MM = {SURFACES[0]: 12.0, SURFACES[1]: 0.0}
 
 
@@ -122,11 +147,20 @@ class WaterRefraction:
             },
             "optional": {
                 "sim_resolution": ("INT", {
-                    "default": 160, "min": 64, "max": 192, "step": 8,
-                    "tooltip": "Fluid grid width. The speed dial. 112 resolves the "
-                               "2.727mm capillary length across 7.6 cells; below ~80 "
-                               "the surface loses the fine structure that folds. "
-                               "Cost scales roughly with the square."
+                    "default": 0, "min": 0, "max": 256, "step": 8,
+                    "tooltip": "0 = AUTO, which is what you want. Auto sizes the "
+                               "fluid grid so each cell is 0.25mm whatever the field "
+                               "width, i.e. about 11 cells across the 2.727mm "
+                               "capillary length. That matters because the ripple at "
+                               "that scale is what supplies the slope that makes a "
+                               "pool FOLD: measured, 7.6 cells gives 2% folding and "
+                               "10.9 gives 20%. Pinning this to a fixed number is a "
+                               "trap, because dx = field_width / this, so widening "
+                               "the framing silently coarsens the grid and the folds "
+                               "quietly disappear (57.7% at 20mm, 31.3% at 40mm, "
+                               "2.4% at 80mm, all at 160). Set it by hand only to "
+                               "trade quality for speed deliberately. Cost scales "
+                               "roughly with the square."
                 }),
                 "aperture_samples": ("INT", {
                     "default": 32, "min": 8, "max": 64, "step": 4,
@@ -182,6 +216,17 @@ class WaterRefraction:
               f"sweep {pour_sweep:.2f}, "
               f"sample {sample_ms:.0f}ms + settle {settle_ms:.0f}ms, sim {sim_resolution}")
 
+        nx_used = (auto_sim_resolution(field_width_mm) if int(sim_resolution) <= 0
+                   else int(sim_resolution))
+        dx_mm = field_width_mm / max(nx_used, 1)
+        note = ""
+        if int(sim_resolution) <= 0 and dx_mm > TARGET_DX_MM * 1.05:
+            note = (f"  [capped at {AUTO_NX_MAX}: cells are {dx_mm:.3f}mm, coarser "
+                    f"than the {TARGET_DX_MM}mm the capillary ripple wants, so "
+                    f"expect reduced folding at this field width]")
+        print(f"[Darkroom]   grid {nx_used} ({'auto' if int(sim_resolution) <= 0 else 'manual'}), "
+              f"dx {dx_mm:.3f}mm = {CAPILLARY_MM/dx_mm:.1f} cells per capillary length{note}")
+
         out_imgs, out_masks = [], []
         cached = None
         for i, frame in enumerate(frames):
@@ -189,7 +234,7 @@ class WaterRefraction:
             if cached is None or vary_per_frame:
                 h_sim, sim = simulate(
                     field_width_mm, field_h_mm, volume_ml=water_ml,
-                    nx=int(sim_resolution), seed=s, sample_ms=sample_ms,
+                    nx=nx_used, seed=s, sample_ms=sample_ms,
                     sweep=pour_sweep, sweep_angle_deg=sweep_angle,
                     initial_film_mm=SURFACE_FILM_MM.get(surface, 12.0))
                 h_sim = settle(h_sim, sim.dx, settle_ms / 1000.0)

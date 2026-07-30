@@ -285,6 +285,25 @@ for sd in range(64):
 check("I12 no seed puts the pour off the plate", off == 0,
       f"{off}/192 seed-sweep combinations off-plate, worst overshoot {worst:+.3f}")
 
+# --- I14 the auto grid rule -------------------------------------------------
+print("\nI14  the auto grid must keep the CELL SIZE physical, not a number fixed")
+_bad = []
+for _f in (10.0, 20.0, 40.0, 60.0):
+    _nx = NodeMod.auto_sim_resolution(_f)
+    _cells = WR.CAPILLARY_MM / (_f / _nx)
+    if _cells < 9.5:
+        _bad.append((_f, _cells))
+check("I14 the capillary length stays resolved up to a 60mm field", not _bad,
+      f"worst {min([WR.CAPILLARY_MM/(f/NodeMod.auto_sim_resolution(f)) for f in (10.,20.,40.,60.)]):.1f}"
+      f" cells per capillary length" + (f"; failures {_bad}" if _bad else ""))
+check("I14 auto scales with field width rather than staying constant",
+      NodeMod.auto_sim_resolution(40.0) > NodeMod.auto_sim_resolution(20.0),
+      f"20mm -> {NodeMod.auto_sim_resolution(20.0)}, "
+      f"40mm -> {NodeMod.auto_sim_resolution(40.0)}")
+check("I14 auto is capped so a wide field cannot hang the node",
+      NodeMod.auto_sim_resolution(250.0) <= NodeMod.AUTO_NX_MAX,
+      f"250mm -> {NodeMod.auto_sim_resolution(250.0)} (cap {NodeMod.AUTO_NX_MAX})")
+
 # --- negative controls ------------------------------------------------------
 print("\nNC  negative controls — each MUST fail")
 c = [math.hypot(*(np.array(WR.trace_reference(h, FIELD, iy, ix))
