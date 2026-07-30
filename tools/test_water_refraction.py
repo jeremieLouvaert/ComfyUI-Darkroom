@@ -223,10 +223,19 @@ from importlib import import_module as _im
 NodeMod = _im(f"{_pkg}.nodes.water_refraction")
 node = NodeMod.WaterRefraction()
 batch = torch.rand(2, 96, 72, 3)
-img_out, mask_out = node.execute(batch, field_width_mm=40.0, water_ml=8.0,
-                                 pour_sweep=1.0, sweep_angle=55.0, sample_ms=40.0,
+img_out, mask_out = node.execute(batch, field_width_mm=40.0,
+                                 surface=NodeMod.SURFACES[0], water_ml=8.0,
+                                 pour_sweep=1.0, sweep_angle=45.0, sample_ms=40.0,
                                  settle_ms=0.0, depth_scale=1.0, aperture=0.02,
                                  seed=0, sim_resolution=64, aperture_samples=8)
+# both surface modes must execute -- the switch is a look control, not a code path
+for _sf in NodeMod.SURFACES:
+    _i, _m = node.execute(batch, field_width_mm=40.0, surface=_sf, water_ml=8.0,
+                          pour_sweep=1.0, sweep_angle=45.0, sample_ms=40.0,
+                          settle_ms=0.0, depth_scale=1.0, aperture=0.02, seed=0,
+                          sim_resolution=64, aperture_samples=8)
+    check(f"I10 surface mode runs: {_sf.split(' (')[0]}",
+          bool(torch.isfinite(_i).all()) and _i.shape == batch.shape)
 check("I10 IMAGE shape and dtype survive", img_out.shape == batch.shape
       and img_out.dtype == torch.float32, f"{tuple(img_out.shape)} {img_out.dtype}")
 check("I10 output is finite and in [0,1]",

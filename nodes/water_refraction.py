@@ -29,6 +29,15 @@ from ..utils.water_refraction import (simulate, settle, to_image_res, render,
                                       CAPILLARY_MM, DELTA_MAX_RATIO)
 
 
+SURFACES = [
+    "standing pool (heavier, whole frame)",
+    "dry screen (readable, large clear areas)",
+]
+# mm of water already present. The pool depth is the EXP-10 value Jeremie picked as
+# the favourite; a free puddle caps near 4mm, so this one implies a tray or a bezel.
+SURFACE_FILM_MM = {SURFACES[0]: 12.0, SURFACES[1]: 0.0}
+
+
 class WaterRefraction:
 
     @classmethod
@@ -44,8 +53,22 @@ class WaterRefraction:
                                "a whole tablet (250mm) correctly gives almost "
                                "nothing. The reference look lives at 20-50mm."
                 }),
+                "surface": (SURFACES, {
+                    "default": SURFACES[0],
+                    "tooltip": "What the water is poured onto. THE biggest look "
+                               "lever, and the two options are different looks "
+                               "rather than two ends of a dial.\n\n"
+                               "Standing pool: pouring INTO water that is already "
+                               "there. The disturbance reaches the whole frame, "
+                               "which gives the heavier, more liquid result.\n\n"
+                               "Dry screen: the water only exists where it has been "
+                               "poured, so large areas stay completely undistorted "
+                               "and the subject stays very readable.\n\n"
+                               "(A free puddle cannot hold more than ~4mm on its "
+                               "own, so the pool option implies a tray or a bezel.)"
+                }),
                 "water_ml": ("FLOAT", {
-                    "default": 16.0, "min": 1.0, "max": 60.0, "step": 0.5,
+                    "default": 10.0, "min": 1.0, "max": 60.0, "step": 0.5,
                     "tooltip": "How much water is poured. The intensity dial: more "
                                "water is deeper water is more displacement. Raising "
                                "it also shrinks the undistorted area, which is what "
@@ -63,7 +86,7 @@ class WaterRefraction:
                     "tooltip": "Direction the stream is swept across the frame."
                 }),
                 "sample_ms": ("FLOAT", {
-                    "default": 80.0, "min": 20.0, "max": 300.0, "step": 5.0,
+                    "default": 150.0, "min": 20.0, "max": 300.0, "step": 5.0,
                     "tooltip": "When the photograph is taken, measured from the "
                                "start of the pour. Below the pour duration (100ms) "
                                "you catch the live event; well above it the water "
@@ -99,7 +122,7 @@ class WaterRefraction:
             },
             "optional": {
                 "sim_resolution": ("INT", {
-                    "default": 112, "min": 64, "max": 160, "step": 8,
+                    "default": 160, "min": 64, "max": 192, "step": 8,
                     "tooltip": "Fluid grid width. The speed dial. 112 resolves the "
                                "2.727mm capillary length across 7.6 cells; below ~80 "
                                "the surface loses the fine structure that folds. "
@@ -146,8 +169,8 @@ class WaterRefraction:
     FUNCTION = "execute"
     CATEGORY = "AKURATE/Darkroom/Lens"
 
-    def execute(self, image, field_width_mm, water_ml, pour_sweep, sweep_angle,
-                sample_ms, settle_ms, depth_scale, aperture, seed,
+    def execute(self, image, field_width_mm, surface, water_ml, pour_sweep,
+                sweep_angle, sample_ms, settle_ms, depth_scale, aperture, seed,
                 sim_resolution=112, aperture_samples=32, env_strength=1.0,
                 grain_restore=1.0, dispersion=False, vary_per_frame=False):
         frames = tensor_to_numpy_batch(image)
@@ -155,7 +178,8 @@ class WaterRefraction:
         field_h_mm = field_width_mm * H / W
 
         print(f"[Darkroom] Water Refraction: {W}x{H}, field {field_width_mm:.1f}x"
-              f"{field_h_mm:.1f}mm, {water_ml:.1f}ml, sweep {pour_sweep:.2f}, "
+              f"{field_h_mm:.1f}mm, {water_ml:.1f}ml onto {surface.split(chr(32))[0]}, "
+              f"sweep {pour_sweep:.2f}, "
               f"sample {sample_ms:.0f}ms + settle {settle_ms:.0f}ms, sim {sim_resolution}")
 
         out_imgs, out_masks = [], []
@@ -166,7 +190,8 @@ class WaterRefraction:
                 h_sim, sim = simulate(
                     field_width_mm, field_h_mm, volume_ml=water_ml,
                     nx=int(sim_resolution), seed=s, sample_ms=sample_ms,
-                    sweep=pour_sweep, sweep_angle_deg=sweep_angle)
+                    sweep=pour_sweep, sweep_angle_deg=sweep_angle,
+                    initial_film_mm=SURFACE_FILM_MM.get(surface, 12.0))
                 h_sim = settle(h_sim, sim.dx, settle_ms / 1000.0)
                 cached = to_image_res(h_sim, H, W)
                 fold = float((jacobian_det(cached, field_width_mm) < 0).mean())
