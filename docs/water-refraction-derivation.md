@@ -1,4 +1,4 @@
-# Water Refraction — depth-averaged FLIP + exact Snell refraction
+# Water Refraction — depth-averaged free surface + exact Snell refraction
 
 New flagship simulation node. Reference set: nine photographs by the artist who displays
 his images on a tablet and pours water over the screen, shooting through the pour
@@ -335,7 +335,7 @@ that order — optics first, cheaply.
   **Jeremie's eyeball on Stage A before a single line of solver is written.** If the optics
   cannot reach the references with a hand-made surface, no solver will save it, and we stop
   having spent almost nothing.
-- **Stage B — the FLIP solver**, only after Stage A passes. Its own checks (mass
+- **Stage B — the fluid solver**, only after Stage A passes. Its own checks (mass
   conservation, CFL stability, capillary scale, contact line) and its own eyeball.
 
 ## 10. Teeth

@@ -5,7 +5,7 @@ Refracts the image through a SIMULATED water surface poured onto the screen.
 Full derivation: docs/water-refraction-derivation.md.
 
 Why this is not a displacement filter:
-  - the warp is a consequence of a depth-averaged FLIP/PIC fluid simulation, not
+  - the warp is a consequence of a depth-averaged fluid simulation, not
     a noise texture. The optics read only h(x,y) from it.
   - refraction is exact Snell, so displacement is hard-bounded at 0.881 * depth
     because theta_t saturates at the 48.6deg critical angle. That bound is why
@@ -15,9 +15,9 @@ Why this is not a displacement filter:
   - a finite aperture blends those folded branches instead of seaming them,
     which is what removes the chrome / liquify look.
 
-Costly by ComfyUI standards: the fluid step is ~40ms and a default run is a few
-hundred steps, so expect tens of seconds at 1024. `sim_resolution` is the
-speed dial and it trades structure, not correctness.
+Costly by ComfyUI standards: expect ~45s at 1024. `sim_resolution` is left on
+AUTO by default because it is not merely a speed dial -- it sets whether the
+capillary ripple is resolved, and that ripple is what makes a pool fold.
 """
 
 import numpy as np

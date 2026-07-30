@@ -5,7 +5,7 @@ Full derivation: docs/water-refraction-derivation.md. What makes this not a
 displacement filter, in order of how much each carries:
 
   1. The warp is a CONSEQUENCE of a simulated water surface, not a texture. A
-     depth-averaged FLIP/PIC solver pours real water onto the screen; the optics
+     depth-averaged grid solver pours real water onto the screen; the optics
      then read only h(x,y) from it. Nothing here is a noise field dressed up.
 
   2. Refraction is EXACT Snell, not the small-angle form. Because theta_t
@@ -63,7 +63,7 @@ SWEEP_SPAN = 0.48
 
 
 # ===========================================================================
-# Fluid solver — depth-averaged FLIP/PIC
+# Fluid solver — depth-averaged, on a grid
 # ===========================================================================
 
 class GridShallowWater:
