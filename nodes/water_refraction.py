@@ -24,7 +24,7 @@ import numpy as np
 import torch
 
 from ..utils.image import tensor_to_numpy_batch, numpy_batch_to_tensor
-from ..utils.water_refraction import (simulate, settle, to_image_res, render,
+from ..utils.water_refraction import (simulate, settle, to_image_res, render_auto,
                                       jacobian_det, grain_deficit, restore_grain,
                                       CAPILLARY_MM, DELTA_MAX_RATIO)
 
@@ -208,7 +208,7 @@ class WaterRefraction:
 
     def execute(self, image, field_width_mm, surface, water_ml, pour_sweep,
                 sweep_angle, sample_ms, settle_ms, depth_scale, aperture, seed,
-                sim_resolution=112, aperture_samples=32, env_strength=1.0,
+                sim_resolution=0, aperture_samples=32, env_strength=1.0,
                 grain_restore=1.0, dispersion=False, vary_per_frame=False):
         frames = tensor_to_numpy_batch(image)
         H, W = frames[0].shape[:2]
@@ -252,7 +252,7 @@ class WaterRefraction:
             img = frame.astype(np.float64)
             if img.shape[2] > 3:
                 img = img[..., :3]
-            out = render(img, h_mm, field_width_mm, aperture_ratio=aperture,
+            out = render_auto(img, h_mm, field_width_mm, aperture_ratio=aperture,
                          samples=int(aperture_samples), depth_scale=depth_scale,
                          env_strength=env_strength, dispersion=bool(dispersion),
                          seed=s)
