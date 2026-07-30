@@ -285,6 +285,33 @@ for sd in range(64):
 check("I12 no seed puts the pour off the plate", off == 0,
       f"{off}/192 seed-sweep combinations off-plate, worst overshoot {worst:+.3f}")
 
+# --- I15 minification must AVERAGE, not point-sample -------------------------
+print("\nI15  a compressed region must area-average, not alias")
+_K = 4
+_rng2 = np.random.default_rng(5)
+_yy, _xx = np.mgrid[0:128, 0:128].astype(np.float64)
+_fine = (0.5 * ((np.floor(_xx / 3) + np.floor(_yy / 3)) % 2)
+         + 0.5 * _rng2.random((128, 128)))
+_img15 = np.dstack([_fine] * 3)
+_h15 = band_surface(128, 128, seed=9, pool=0.30, rough=0.10)
+from scipy.ndimage import zoom as _zoom15
+_big = np.clip(_zoom15(_img15, (_K, _K, 1), order=1), 0.0, 1.0)
+_bigh = WR.to_image_res(_h15, 128 * _K, 128 * _K)
+_tr = WR.render(_big, _bigh, FIELD, aperture_ratio=0.0, samples=1, fresnel=False,
+                pixel_aa=False)
+_tr = _tr.reshape(128, _K, 128, _K, 3).mean(axis=(1, 3))
+_dJ = np.abs(WR.jacobian_det(_h15, FIELD))
+_hot = _dJ >= 2.0
+_e = {}
+for _tag, _aa in (("point", False), ("area", True)):
+    _r = WR.render(_img15, _h15, FIELD, aperture_ratio=0.0, samples=24,
+                   fresnel=False, pixel_aa=_aa, seed=1)
+    _e[_tag] = float(np.abs(_r - _tr).mean(axis=2)[_hot].mean()) if _hot.sum() > 50 else 0.0
+check("I15 area sampling beats point sampling where the map compresses",
+      _e["area"] < 0.85 * _e["point"],
+      f"error at detJ>=2: point {_e['point']:.4f} -> area {_e['area']:.4f} "
+      f"({100*(_e['area']-_e['point'])/max(_e['point'],1e-9):+.0f}%)")
+
 # --- I14 the auto grid rule -------------------------------------------------
 print("\nI14  the auto grid must keep the CELL SIZE physical, not a number fixed")
 _bad = []

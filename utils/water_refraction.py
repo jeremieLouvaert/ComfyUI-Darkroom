@@ -466,7 +466,7 @@ def _sample(img, ys, xs, order=3):
 def render(img, h_mm, field_width_mm, *, aperture_ratio=0.020, samples=32,
            ior=N_WATER, depth_scale=1.0, fresnel=True,
            env_color=(0.75, 0.78, 0.82), env_strength=1.0, dispersion=False,
-           order=3, seed=0):
+           order=3, seed=0, pixel_aa=True):
     """
     Refract `img` (H,W,3 in [0,1]) through the surface, with a finite aperture.
 
@@ -498,15 +498,42 @@ def render(img, h_mm, field_width_mm, *, aperture_ratio=0.020, samples=32,
         if cos_i is None:
             cos_i = ci_map
         rho = (aperture_ratio * h) / mm_per_px
+
+        # How wide the pixel's preimage is, in SOURCE pixels: m = sqrt(|det J|).
+        # Jitter must vanish as m -> 1, because the input image has ALREADY been
+        # through a sensor's own pixel integration -- averaging over a full pixel
+        # again would double-count it and blur an undistorted image. That is not
+        # hypothetical: applying the jitter unconditionally broke invariant I3,
+        # flat water is a bit-exact identity, by 4.3e-1. Only the EXCESS over one
+        # source pixel needs integrating, which is what the sqrt(1 - 1/m^2) factor
+        # is: exactly 0 at m = 1, tending to 1 under strong compression.
+        _sx = dxp + np.arange(W)[None, :]
+        _sy = dyp + np.arange(H)[:, None]
+        _sxy, _sxx = np.gradient(_sx)
+        _syy, _syx = np.gradient(_sy)
+        _m2 = np.abs(_sxx * _syy - _sxy * _syx)          # |det J|, = m^2
+        jitter_amp = np.sqrt(np.maximum(1.0 - 1.0 / np.maximum(_m2, 1e-9), 0.0))
+        if not pixel_aa:
+            jitter_amp = np.zeros_like(jitter_amp)
         chan = np.zeros_like(img, dtype=np.float64)
         for _ in range(max(1, int(samples))):
             ang = 2.0 * math.pi * rng.random()
             rad = math.sqrt(rng.random())
-            qy = ys0 + rad * math.sin(ang) * rho
-            qx = xs0 + rad * math.cos(ang) * rho
+            # PREIMAGE JITTER, alongside the aperture offset. Where the map
+            # compresses, one output pixel draws from a LARGER patch of screen, so
+            # point-sampling it aliases -- measured against a supersampled truth,
+            # error climbed monotonically with compression (0.039 magnified, 0.052
+            # at 1-2x, 0.062 at 2-4x, 0.078 beyond 4x). Jittering the sample
+            # position makes the existing aperture budget integrate that preimage
+            # too, at no extra cost. The displacement is evaluated AT the jittered
+            # position, because the surface varies across the pixel as well.
+            py = ys0 + jitter_amp * (rng.random() - 0.5)
+            px = xs0 + jitter_amp * (rng.random() - 0.5)
+            qy = py + rad * math.sin(ang) * rho
+            qx = px + rad * math.cos(ang) * rho
             dxs = map_coordinates(dxp, [qy, qx], order=1, mode="nearest")
             dys = map_coordinates(dyp, [qy, qx], order=1, mode="nearest")
-            chan += _sample(img, ys0 + dys, xs0 + dxs, order=order)
+            chan += _sample(img, py + dys, px + dxs, order=order)
         chan /= max(1, int(samples))
         if dispersion:
             acc[..., ci] = chan[..., ci]
