@@ -53,6 +53,14 @@ DELTA_MAX_RATIO = math.tan(math.pi / 2 - CRITICAL_ANGLE)  # 0.881
 R0 = ((1.0 - N_WATER) / (1.0 + N_WATER)) ** 2            # Fresnel at normal incidence
 IOR_RGB = (1.3311, 1.3330, 1.3435)                       # ~700 / ~550 / ~400 nm
 
+# How far a full sweep drags the stream across the frame. Was 0.778, chosen to match
+# the spike path exactly -- but at that length the stroke plus its spawn disc fills
+# the frame, leaving the seed no room to move the pour without pushing it off the
+# plate. Since the sweep turned out to have NO measurable effect on the surface's
+# morphology (elongation 1.39 swept vs 1.42 stationary), trading stroke length for
+# genuine seed variety costs nothing real. 0.48 leaves +/-0.16 of frame to jitter in.
+SWEEP_SPAN = 0.48
+
 
 # ===========================================================================
 # Fluid solver — depth-averaged FLIP/PIC
@@ -314,7 +322,7 @@ class ShallowWaterFLIP:
         return self.px.size * self.vol
 
 
-def sweep_path(s, w_mm, h_mm, sweep, angle_deg=45.0, wander=0.10):
+def sweep_path(s, w_mm, h_mm, sweep, angle_deg=45.0, wander=0.10, centre=(0.5, 0.5)):
     """
     Where the stream lands at normalised time s in [0,1].
 
@@ -332,16 +340,48 @@ def sweep_path(s, w_mm, h_mm, sweep, angle_deg=45.0, wander=0.10):
     crater the sweep exists to prevent. Angles are taken in NORMALISED frame
     coordinates, not millimetres, so the path is the same fraction of the picture
     whatever the aspect ratio.
+
+    `centre` is where the stroke is centred, as a fraction of the frame, and it is
+    driven by the SEED in simulate(). It used to be hardcoded to (0.5, 0.5), which
+    made the seed cosmetic: it reached only the particle jitter inside the spawn
+    disc, so re-rolling changed the water's texture and never where it landed.
+    Reported from the live node; measured centroid spread across four seeds was
+    0.101 mm on a 40 mm field, i.e. nothing.
     """
     a = math.radians(angle_deg)
-    cx, cy = 0.5 * w_mm, 0.5 * h_mm
-    span = sweep * 0.778                      # 0.778 * cos(45deg) = 0.55 of frame
+    cx, cy = centre[0] * w_mm, centre[1] * h_mm
+    span = sweep * SWEEP_SPAN
     ox = (s - 0.5) * span * math.cos(a) * w_mm
     oy = (s - 0.5) * span * math.sin(a) * h_mm
     if wander > 0.0 and sweep > 0.0:
         ox += wander * sweep * w_mm * 0.18 * math.sin(7.0 * s)
         oy += wander * sweep * h_mm * 0.12 * math.sin(4.5 * s + 1.0)
     return cx + ox, cy + oy
+
+
+def stroke_centre(seed, sweep):
+    """
+    Where the seed puts the pour, as a fraction of the frame.
+
+    Two bugs live here, both found from the live node rather than from the teeth,
+    which is why both now have regression checks:
+
+      THE SEED MUST MOVE THE POUR. This was hardcoded to (0.5, 0.5), so the seed
+      only ever reached the particle jitter inside the spawn disc: re-rolling
+      changed the water's texture and never where it landed. Measured centroid
+      spread across four seeds was 0.101 mm on a 40 mm field.
+
+      THE STROKE MUST STAY ON THE PLATE. The sweep reaches +/-0.275 of the frame
+      either side of the centre, so the first fix's flat +/-0.30 jitter could put
+      the pour at 107% of the frame -- off the plate for 4 of 6 seeds, dumping the
+      water against the boundary. The room left for jitter therefore has to shrink
+      as `sweep` grows, which is what this computes.
+    """
+    prng = np.random.default_rng((int(seed) & 0x7FFFFFFF) ^ 0x5EED)
+    half = 0.5 * float(sweep) * SWEEP_SPAN + 0.06   # stroke half-span + the spawn disc
+    room = max(0.5 - half - 0.04, 0.0)              # keep 4% clear of the wall
+    return (0.5 + room * (prng.random() - 0.5) * 2.0,
+            0.5 + room * (prng.random() - 0.5) * 2.0)
 
 
 def simulate(field_w_mm, field_h_mm, *, volume_ml=16.0, nx=112, seed=0,
@@ -357,6 +397,13 @@ def simulate(field_w_mm, field_h_mm, *, volume_ml=16.0, nx=112, seed=0,
     look lives in the live event, and letting it finish and spread costs both the
     depth that drives displacement and the structure that drives folding.
     """
+    # THE SEED MUST MOVE THE POUR. A stroke centred at (0.5,0.5) every time made the
+    # seed cosmetic: it reached only the particle jitter inside the spawn disc, so
+    # re-rolling changed the water's texture and never where it landed. The stroke is
+    # kept inside the middle 60% of the frame so a re-roll cannot dump the whole pour
+    # off-picture, and the sweep DIRECTION stays the user's `sweep_angle`.
+    centre = stroke_centre(seed, sweep)
+
     sim = ShallowWaterFLIP(field_w_mm, field_h_mm, nx=nx, seed=seed,
                            tilt_deg=tilt_deg, surface_tension=surface_tension,
                            viscosity=viscosity, flip_ratio=flip_ratio, edge=edge)
@@ -378,7 +425,7 @@ def simulate(field_w_mm, field_h_mm, *, volume_ml=16.0, nx=112, seed=0,
             n = int(carry)
             carry -= n
             cx, cy = sweep_path(min(sim.t / pour_s, 1.0), field_w_mm, field_h_mm,
-                                sweep, sweep_angle_deg)
+                                sweep, sweep_angle_deg, centre=centre)
             sim.spawn(n, cx, cy, pour_radius_mm, pour_speed_mm_s)
         if sim.px.size:
             idx = sim._idx()

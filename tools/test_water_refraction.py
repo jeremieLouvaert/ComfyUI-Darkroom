@@ -234,6 +234,31 @@ check("I10 batch frames share one surface when vary_per_frame is off",
       float((img_out[0] - img_out[1]).abs().max()) > 0.0 or True,
       "(frames differ only by content, surface is shared)")
 
+# --- I11/I12 the two live-reported bugs -------------------------------------
+# Both were found by Jeremie running the node, not by this suite, so both get a
+# check here. Neither needs a simulation: the defect was in where the pour is
+# placed, which is pure geometry.
+print("\nI11  the seed must MOVE the pour (live-reported: it did not)")
+cs = [WR.stroke_centre(sd, 1.0) for sd in (100, 101, 999, 4242, 7, 31)]
+spread = max(math.hypot(a[0] - b[0], a[1] - b[1]) for a in cs for b in cs)
+check("I11 stroke centre varies with seed", spread > 0.10,
+      f"spread {spread:.3f} of frame across 6 seeds")
+
+print("\nI12  the stroke must stay ON THE PLATE for every seed")
+worst, off = 0.0, 0
+for sd in range(64):
+    for sw in (0.0, 0.5, 1.0):
+        c = WR.stroke_centre(sd, sw)
+        xs = [WR.sweep_path(t, 40.0, 40.0, sw, 45.0, centre=c)[0] / 40.0
+              for t in (0.0, 0.25, 0.5, 0.75, 1.0)]
+        ys = [WR.sweep_path(t, 40.0, 40.0, sw, 45.0, centre=c)[1] / 40.0
+              for t in (0.0, 0.25, 0.5, 0.75, 1.0)]
+        m = max(max(xs) - 1.0, -min(xs), max(ys) - 1.0, -min(ys))
+        worst = max(worst, m)
+        off += m > 0
+check("I12 no seed puts the pour off the plate", off == 0,
+      f"{off}/192 seed-sweep combinations off-plate, worst overshoot {worst:+.3f}")
+
 # --- negative controls ------------------------------------------------------
 print("\nNC  negative controls — each MUST fail")
 c = [math.hypot(*(np.array(WR.trace_reference(h, FIELD, iy, ix))
