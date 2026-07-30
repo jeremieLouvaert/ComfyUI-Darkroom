@@ -53,12 +53,17 @@ DELTA_MAX_RATIO = math.tan(math.pi / 2 - CRITICAL_ANGLE)  # 0.881
 R0 = ((1.0 - N_WATER) / (1.0 + N_WATER)) ** 2            # Fresnel at normal incidence
 IOR_RGB = (1.3311, 1.3330, 1.3435)                       # ~700 / ~550 / ~400 nm
 
-# How far a full sweep drags the stream across the frame. Was 0.778, chosen to match
-# the spike path exactly -- but at that length the stroke plus its spawn disc fills
-# the frame, leaving the seed no room to move the pour without pushing it off the
-# plate. Since the sweep turned out to have NO measurable effect on the surface's
-# morphology (elongation 1.39 swept vs 1.42 stationary), trading stroke length for
-# genuine seed variety costs nothing real. 0.48 leaves +/-0.16 of frame to jitter in.
+# How far a full sweep drags the stream across the frame. Was 0.778, matching the
+# spike path exactly, but at that length the stroke plus its spawn disc fills the
+# frame and leaves the seed no room to move the pour without pushing it off the
+# plate. 0.48 leaves +/-0.16 of frame to jitter in.
+#
+# The original note here justified the reduction by claiming the sweep had no
+# measurable effect. That was WRONG -- it came from the particle solver read through
+# a metric later shown to be measuring frame aspect ratio. Re-measured on the grid
+# solver with placement pinned, sweeping moves the surface 2.24mm mean and folding
+# runs 39.0% / 30.4% / 24.3% across the range. So the value stands, but for the
+# honest reason: sweep length and seed placement BOTH matter and 0.48 balances them.
 SWEEP_SPAN = 0.48
 
 
