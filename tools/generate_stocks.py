@@ -313,7 +313,10 @@ def main():
         print(f"  [OK] {c1_name} -> {key}")
 
     # ── Output for copy-paste ──
-    output_path = Path(__file__).parent / "generated_stocks.py"
+    # .txt, not .py: this is a bare dict BODY meant to be pasted into
+    # data/color_stocks.py, so it has never been importable on its own. Naming it
+    # .py made every linter that walks the package report it as broken source.
+    output_path = Path(__file__).parent / "generated_stocks.txt"
     with open(output_path, "w", encoding="utf-8") as f:
         f.write("# ═══════════════════════════════════════════════════════════\n")
         f.write("# REFINED NEGATIVE STOCKS (C1 data)\n")

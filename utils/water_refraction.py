@@ -589,7 +589,8 @@ def render_gpu(img, h_mm, field_width_mm, *, aperture_ratio=0.020, samples=32,
                             indexing="ij")
 
     def grad(a):
-        gy = torch.zeros_like(a); gx = torch.zeros_like(a)
+        gy = torch.zeros_like(a)
+        gx = torch.zeros_like(a)
         gy[1:-1, :] = (a[2:, :] - a[:-2, :]) / (2 * mm_per_px)
         gy[0, :] = (a[1, :] - a[0, :]) / mm_per_px
         gy[-1, :] = (a[-1, :] - a[-2, :]) / mm_per_px
@@ -614,7 +615,8 @@ def render_gpu(img, h_mm, field_width_mm, *, aperture_ratio=0.020, samples=32,
         return Fn.grid_sample(field4, grid, mode=mode, padding_mode="reflection",
                               align_corners=True)
 
-    gen = torch.Generator(device="cpu"); gen.manual_seed(int(seed) & 0x7FFFFFFF)
+    gen = torch.Generator(device="cpu")
+    gen.manual_seed(int(seed) & 0x7FFFFFFF)
     rand = lambda: float(torch.rand(1, generator=gen))
 
     iors = IOR_RGB if dispersion else (ior,)

@@ -100,22 +100,28 @@ def hsl_to_rgb(h, s, l):
 
     # Sector 0: [0, 60)
     mask = (h_prime >= 0) & (h_prime < 1)
-    r[mask] = c[mask]; g[mask] = x[mask]
+    r[mask] = c[mask]
+    g[mask] = x[mask]
     # Sector 1: [60, 120)
     mask = (h_prime >= 1) & (h_prime < 2)
-    r[mask] = x[mask]; g[mask] = c[mask]
+    r[mask] = x[mask]
+    g[mask] = c[mask]
     # Sector 2: [120, 180)
     mask = (h_prime >= 2) & (h_prime < 3)
-    g[mask] = c[mask]; b[mask] = x[mask]
+    g[mask] = c[mask]
+    b[mask] = x[mask]
     # Sector 3: [180, 240)
     mask = (h_prime >= 3) & (h_prime < 4)
-    g[mask] = x[mask]; b[mask] = c[mask]
+    g[mask] = x[mask]
+    b[mask] = c[mask]
     # Sector 4: [240, 300)
     mask = (h_prime >= 4) & (h_prime < 5)
-    r[mask] = x[mask]; b[mask] = c[mask]
+    r[mask] = x[mask]
+    b[mask] = c[mask]
     # Sector 5: [300, 360)
     mask = (h_prime >= 5) & (h_prime < 6)
-    r[mask] = c[mask]; b[mask] = x[mask]
+    r[mask] = c[mask]
+    b[mask] = x[mask]
 
     result = np.stack([r + m, g + m, b + m], axis=-1)
     return np.clip(result, 0.0, 1.0).astype(np.float32)

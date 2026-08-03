@@ -53,10 +53,12 @@ def align_crops(ours, acr):
     ah, aw = acr.shape[:2]
     if (th, tw) == (ah, aw):
         return ours_trim, acr
-    h = min(th, ah); w = min(tw, aw)
+    h = min(th, ah)
+    w = min(tw, aw)
     def ccrop(img):
         ih, iw = img.shape[:2]
-        y0 = (ih - h) // 2; x0 = (iw - w) // 2
+        y0 = (ih - h) // 2
+        x0 = (iw - w) // 2
         return img[y0:y0+h, x0:x0+w]
     return ccrop(ours_trim), ccrop(acr)
 
@@ -179,7 +181,8 @@ def main():
         ax.plot(x_plot, y_current, color="orange", lw=2, label="current stopgap (from session 3)")
         ax.plot(xs, ys, color=colors[c], lw=2.5, marker="o", ms=3, label=f"recovered {labels[c]} (median)")
         ax.plot([0, 1], [0, 1], color="gray", lw=1, ls="--", alpha=0.5, label="identity")
-        ax.set_xlim(0, 1); ax.set_ylim(0, 1)
+        ax.set_xlim(0, 1)
+        ax.set_ylim(0, 1)
         ax.set_xlabel("post-DCP linear value (ours)")
         if c == 0:
             ax.set_ylabel("ACR linear value (target)")

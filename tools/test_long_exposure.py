@@ -184,21 +184,21 @@ else:
 print("\nT9  node level")
 node = NodeMod.LongExposure()
 batch = torch.rand(2, 64, 48, 3)
-img_out, = node.execute(batch, exposure_px=25.0, hand_steadiness=1.0, roll_deg=1.5,
-                        seed=0, poses=24)
+img_out, = node.execute(batch, exposure_px=25.0, hand_steadiness=1.0, variety=1.0,
+                        roll_deg=1.5, seed=0, poses=24)
 check("T9 shape and dtype survive",
       img_out.shape == batch.shape and img_out.dtype == torch.float32,
       f"{tuple(img_out.shape)} {img_out.dtype}")
 check("T9 finite and in range", bool(torch.isfinite(img_out).all())
       and float(img_out.min()) >= 0.0 and float(img_out.max()) <= 1.0)
-zero, = node.execute(batch, exposure_px=0.0, hand_steadiness=1.0, roll_deg=0.0,
-                     seed=0, poses=24)
+zero, = node.execute(batch, exposure_px=0.0, hand_steadiness=1.0, variety=1.0,
+                     roll_deg=0.0, seed=0, poses=24)
 check("T9 zero exposure is an identity at node level",
       float((zero - batch).abs().max()) < 1e-7,
       f"max |diff| {float((zero - batch).abs().max()):.2e}")
 mk = torch.zeros(1, 64, 48)
-masked, = node.execute(batch, exposure_px=30.0, hand_steadiness=1.0, roll_deg=2.0,
-                       seed=0, poses=24, subject_mask=mk)
+masked, = node.execute(batch, exposure_px=30.0, hand_steadiness=1.0, variety=1.0,
+                       roll_deg=2.0, seed=0, poses=24, subject_mask=mk)
 # float32 bar, stated once and deliberately. The node may run the GPU path, where
 # grid_sample normalises coordinates in float32 and costs ~1e-6 even at exactly
 # identity positions. The property itself is EXACT and is tested as such against the
@@ -211,8 +211,10 @@ check("T9 an all-zero mask disables the effect entirely (float32 bar)",
 
 # --- negative controls ------------------------------------------------------
 print("\nNC  negative controls — each MUST fail")
-f = np.fft.rfftfreq(96, d=1.0 / 96).copy(); f[0] = 1e-9
-white = np.ones_like(f); white[0] = 0
+f = np.fft.rfftfreq(96, d=1.0 / 96).copy()
+f[0] = 1e-9
+white = np.ones_like(f)
+white[0] = 0
 tot = math.sqrt(float((white ** 2).sum()))
 w_lo = math.sqrt(float((white[(f >= 1.0) & (f <= 3.5)] ** 2).sum())) / tot
 must_fail("NC1 a WHITE-noise path matches the human drift share", 0.82 <= w_lo <= 0.95,

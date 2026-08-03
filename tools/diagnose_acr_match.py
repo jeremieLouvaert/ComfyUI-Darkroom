@@ -105,8 +105,10 @@ def mean_signed(a, b):
 def edge_mask(img, threshold=0.03):
     """Sobel gradient magnitude > threshold on sRGB luminance."""
     y = 0.2126 * img[..., 0] + 0.7152 * img[..., 1] + 0.0722 * img[..., 2]
-    gy = np.zeros_like(y); gy[1:-1, :] = y[2:, :] - y[:-2, :]
-    gx = np.zeros_like(y); gx[:, 1:-1] = y[:, 2:] - y[:, :-2]
+    gy = np.zeros_like(y)
+    gy[1:-1, :] = y[2:, :] - y[:-2, :]
+    gx = np.zeros_like(y)
+    gx[:, 1:-1] = y[:, 2:] - y[:, :-2]
     mag = np.sqrt(gx * gx + gy * gy)
     return mag > threshold
 
