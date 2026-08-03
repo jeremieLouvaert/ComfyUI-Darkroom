@@ -1,5 +1,7 @@
 # ComfyUI-Darkroom
 
+![ComfyUI-Darkroom](assets/hero.jpg)
+
 Professional color grading and film emulation suite for ComfyUI — 59 nodes, 161 film stocks, 35 spectral neg×print LUTs, 102 lens profiles, reference-driven Color Match, colorist scopes, full CMYK print workflow, zero API costs.
 
 The most complete color toolset in the ComfyUI ecosystem. From physics-based film emulation to DaVinci Resolve-level color grading, Camera Raw processing, optical simulation, LUT export, ACES color management, and magazine-ready CMYK print output — everything runs locally with no external dependencies.
