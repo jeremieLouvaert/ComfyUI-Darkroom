@@ -1,7 +1,7 @@
 [project]
 name = "comfyui-darkroom"
 description = "Professional color grading & film emulation suite: 59 nodes, 161 film stocks, 35 spectral neg×print LUTs, 102 lens profiles, handheld long-exposure shake integration, simulated water refraction through exact Snell, procedural film rebate borders, chain-polarity film damage and path-length light leaks, physically derived halation, reference-driven Color Match, Histogram + Vectorscope, full CMYK print workflow, LUT export, ACES, RAW decode with Adobe DCP"
-version = "1.19.0"
+version = "1.20.0"
 license = { file = "LICENSE" }
 dependencies = ["scipy>=1.10.0", "opensimplex>=0.4"]
 

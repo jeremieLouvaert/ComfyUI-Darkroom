@@ -8,7 +8,7 @@ Uses projective (homography) transformation with bilinear interpolation.
 """
 
 import numpy as np
-from scipy.ndimage import map_coordinates
+from scipy.ndimage import map_coordinates, zoom
 
 from ..utils.image import tensor_to_numpy_batch, numpy_batch_to_tensor
 
@@ -64,6 +64,99 @@ def _apply_perspective(img, vertical, horizontal, rotation):
     return np.clip(result, 0.0, 1.0).astype(np.float32)
 
 
+def _prepare_masks_np(mask, batch, h, w):
+    """
+    Mask prep for the numpy/scipy engine (docs/lens-mask-derivation.md
+    §5.4/§3): clamp(0,1) -> float64 -> 2-D unsqueeze -> M==0 guard (treated
+    as absent, console warn) -> per-frame min(i, M-1) -> resize via
+    scipy zoom(order=1, mode='nearest') then [:H,:W] crop and clip.
+    Returns a list of (H, W) float64 arrays, or None if the mask batch is
+    empty.
+    """
+    m = mask.clamp(0.0, 1.0).cpu().numpy().astype(np.float64)
+    if m.ndim == 2:
+        m = m[np.newaxis, ...]
+    M = m.shape[0]
+    if M == 0:
+        print("[Darkroom] Perspective: mask batch is empty (M=0), treating as absent")
+        return None
+
+    masks = []
+    for i in range(batch):
+        mi = m[min(i, M - 1)]
+        if mi.shape != (h, w):
+            mi = zoom(mi, (h / mi.shape[0], w / mi.shape[1]), order=1, mode='nearest')
+            mi = np.clip(mi[:h, :w], 0.0, 1.0)
+        masks.append(mi)
+    return masks
+
+
+def _masked_coords_pc(h, w, vertical, horizontal, rotation, m):
+    """
+    Declared seam (docs/lens-mask-derivation.md §5.3). Unmasked and masked
+    source coordinates for Perspective Correct, from the FULL composed
+    chain rotation -> vertical -> horizontal (§1, composite not per-stage --
+    rotation is displacement-masked like everything else). float64
+    throughout; m is the (H, W) mask array, already resized to the frame.
+    Returns (src_y, src_x, src_y_m, src_x_m).
+    """
+    cy, cx = h / 2.0, w / 2.0
+
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float64)
+    ny = (yy - cy) / cy
+    nx = (xx - cx) / cx
+
+    if abs(rotation) > 0.01:
+        theta = np.radians(rotation)
+        cos_t = np.cos(theta)
+        sin_t = np.sin(theta)
+        rnx = nx * cos_t - ny * sin_t
+        rny = nx * sin_t + ny * cos_t
+        nx, ny = rnx, rny
+
+    if abs(vertical) > 0.001:
+        v_scale = 1.0 / (1.0 + vertical * ny)
+        nx = nx * v_scale
+
+    if abs(horizontal) > 0.001:
+        h_scale = 1.0 / (1.0 + horizontal * nx)
+        ny = ny * h_scale
+
+    src_x = nx * cx + cx
+    src_y = ny * cy + cy
+
+    d_y = src_y - yy
+    d_x = src_x - xx
+    src_y_m = yy + m * d_y
+    src_x_m = xx + m * d_x
+
+    return src_y, src_x, src_y_m, src_x_m
+
+
+def _apply_perspective_masked(img, vertical, horizontal, rotation, m):
+    """
+    Masked Perspective Correct: same warp as _apply_perspective, source
+    lookup scaled by m via the universal D-form (§1). The §1c select is
+    applied once, at the end, against the pristine input -- load-bearing
+    here since the unmasked source coordinate can be inf at singular
+    parameter combinations, and the D-form would otherwise compute
+    0*inf = NaN at m=0 pixels.
+    """
+    h, w = img.shape[:2]
+
+    _, _, src_y_m, src_x_m = _masked_coords_pc(h, w, vertical, horizontal, rotation, m)
+
+    result = np.empty_like(img)
+    for c in range(img.shape[2]):
+        result[..., c] = map_coordinates(
+            img[..., c], [src_y_m, src_x_m],
+            order=1, mode='constant', cval=0.0
+        ).astype(np.float32)
+
+    result = np.clip(result, 0.0, 1.0).astype(np.float32)
+    return np.where((m == 0.0)[..., np.newaxis], img, result)
+
+
 class PerspectiveCorrect:
 
     @classmethod
@@ -87,7 +180,13 @@ class PerspectiveCorrect:
                 }),
                 "auto_crop": ("BOOLEAN", {
                     "default": True,
-                    "tooltip": "Automatically crop to remove black borders from the transform"
+                    "tooltip": "Automatically crop to remove black borders from the transform. "
+                               "Ignored when a mask is connected."
+                }),
+                "mask": ("MASK", {
+                    "tooltip": "Where the correction applies, 0 to 1. Partial values bend lines that "
+                               "cross the mask edge, and strong keystone bows long lines even without a "
+                               "mask. auto_crop is ignored while a mask is connected."
                 }),
             }
         }
@@ -97,17 +196,31 @@ class PerspectiveCorrect:
     FUNCTION = "execute"
     CATEGORY = "AKURATE/Darkroom/Lens"
 
-    def execute(self, image, vertical, horizontal=0.0, rotation=0.0, auto_crop=True):
+    def execute(self, image, vertical, horizontal=0.0, rotation=0.0, auto_crop=True, mask=None):
         if abs(vertical) < 0.001 and abs(horizontal) < 0.001 and abs(rotation) < 0.01:
             return (image,)
 
         print(f"[Darkroom] Perspective: vertical={vertical}, horizontal={horizontal}, rotation={rotation}")
 
         arrays = tensor_to_numpy_batch(image)
+        h, w = arrays[0].shape[:2]
+
+        masks = None
+        if mask is not None:
+            masks = _prepare_masks_np(mask, len(arrays), h, w)
+
+        if masks is not None and auto_crop:
+            print("[Darkroom] Perspective: mask connected, auto_crop ignored")
+        if masks is not None:
+            auto_crop = False
+
         processed = []
 
-        for img in arrays:
-            result = _apply_perspective(img, vertical, horizontal, rotation)
+        for i, img in enumerate(arrays):
+            if masks is None:
+                result = _apply_perspective(img, vertical, horizontal, rotation)
+            else:
+                result = _apply_perspective_masked(img, vertical, horizontal, rotation, masks[i])
 
             if auto_crop:
                 result = _auto_crop(result)

@@ -130,7 +130,7 @@ class LongExposure:
                              0.0, 1.0) for i in range(len(frames))]
             if masks[0].shape != (H, W):
                 from scipy.ndimage import zoom
-                masks = [zoom(mm, (H / mm.shape[0], W / mm.shape[1]), order=1)
+                masks = [zoom(mm, (H / mm.shape[0], W / mm.shape[1]), order=1, mode='nearest')
                          for mm in masks]
                 masks = [np.clip(mm[:H, :W], 0.0, 1.0) for mm in masks]
 
