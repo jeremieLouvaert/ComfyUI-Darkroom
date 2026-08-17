@@ -22,6 +22,7 @@ capillary ripple is resolved, and that ripple is what makes a pool fold.
 
 import numpy as np
 import torch
+from scipy.ndimage import zoom
 
 from ..utils.image import tensor_to_numpy_batch, numpy_batch_to_tensor
 from ..utils.water_refraction import (simulate, settle, to_image_res, render_auto,
@@ -149,6 +150,40 @@ class WaterRefraction:
                 }),
             },
             "optional": {
+                "mask": ("MASK", {
+                    "tooltip": "Modulates how strongly the refraction applies at "
+                               "each output pixel. Mask values run from mask_min "
+                               "(where black) up to full effect (where white), and "
+                               "the warp itself is scaled so partial values do not "
+                               "ghost; the surface sheen and the grain_deficit "
+                               "output follow the same modulation. The water is "
+                               "simulated across the whole frame regardless, so a "
+                               "mask does not make the node faster. With mask_min "
+                               "at 0 a hard mask edge shows a visible seam line; "
+                               "feather by about a quarter of the local "
+                               "displacement, typically tens of pixels at pool "
+                               "depths."
+                }),
+                "mask_min": ("FLOAT", {
+                    "default": 0.15, "min": 0.0, "max": 1.0, "step": 0.05,
+                    "tooltip": "Effect strength where the mask is black. The mask "
+                               "is remapped to run from this floor up to 1, so the "
+                               "default keeps a subtle refraction everywhere and "
+                               "uses the mask to push intensity where it is white. "
+                               "Set 0 to make the mask a hard gate: black means "
+                               "bitwise-untouched pixels and a zero grain_deficit. "
+                               "Ignored when no mask is connected."
+                }),
+                "mask_gamma": ("FLOAT", {
+                    "default": 2.0, "min": 0.25, "max": 4.0, "step": 0.05,
+                    "tooltip": "Contrast of the mask response, applied before "
+                               "mask_min. Above 1 pulls mid grey mask values "
+                               "toward the floor so the painted highlights stand "
+                               "out clearly against them; below 1 lifts the mids "
+                               "instead. 1 is the plain linear remap. Feathered "
+                               "masks are mostly mid grey, which is why the "
+                               "default adds contrast."
+                }),
                 "sim_resolution": ("INT", {
                     "default": 0, "min": 0, "max": 256, "step": 8,
                     "tooltip": "0 = AUTO, which is what you want. Auto sizes the "
@@ -209,7 +244,8 @@ class WaterRefraction:
     def execute(self, image, field_width_mm, surface, water_ml, pour_sweep,
                 sweep_angle, sample_ms, settle_ms, depth_scale, aperture, seed,
                 sim_resolution=0, aperture_samples=32, env_strength=1.0,
-                grain_restore=1.0, dispersion=False, vary_per_frame=False):
+                grain_restore=1.0, dispersion=False, vary_per_frame=False,
+                mask=None, mask_min=0.15, mask_gamma=2.0):
         frames = tensor_to_numpy_batch(image)
         H, W = frames[0].shape[:2]
         field_h_mm = field_width_mm * H / W
@@ -230,6 +266,19 @@ class WaterRefraction:
         print(f"[Darkroom]   grid {nx_used} ({'auto' if int(sim_resolution) <= 0 else 'manual'}), "
               f"dx {dx_mm:.3f}mm = {CAPILLARY_MM/dx_mm:.1f} cells per capillary length{note}")
 
+        # Mask prep, node level (§5): ComfyUI core's own normalisation, not a
+        # bare 2-D unsqueeze -- 4-D masks (1,1,H,W) exist in the wild.
+        m_batch = None
+        if mask is not None:
+            m_batch = mask.cpu()
+            m_batch = m_batch.reshape((-1, m_batch.shape[-2], m_batch.shape[-1]))
+            M = m_batch.shape[0]
+            if M == 0:
+                print("[Darkroom] Water Refraction: empty mask batch, treating "
+                      "as no mask")
+                m_batch = None
+
+        black_warned = False
         out_imgs, out_masks = [], []
         cached = None
         for i, frame in enumerate(frames):
@@ -242,8 +291,9 @@ class WaterRefraction:
                     initial_film_mm=SURFACE_FILM_MM.get(surface, 12.0))
                 h_sim = settle(h_sim, sim.dx, settle_ms / 1000.0)
                 cached = to_image_res(h_sim, H, W)
-                fold = float((jacobian_det(cached, field_width_mm) < 0).mean())
-                dmax = float(np.abs(cached).max()) * DELTA_MAX_RATIO
+                fold = float((jacobian_det(cached, field_width_mm,
+                                           depth_scale=depth_scale) < 0).mean())
+                dmax = float(np.abs(cached).max()) * depth_scale * DELTA_MAX_RATIO
                 print(f"[Darkroom]   surface: max depth {cached.max():.2f}mm "
                       f"(bound {dmax:.2f}mm displacement), {100*fold:.1f}% of frame "
                       f"folded, capillary length {CAPILLARY_MM:.3f}mm")
@@ -252,15 +302,49 @@ class WaterRefraction:
             img = frame.astype(np.float64)
             if img.shape[2] > 3:
                 img = img[..., :3]
+
+            mi = None
+            if m_batch is not None:
+                M = m_batch.shape[0]
+                mi = m_batch[min(i, M - 1)].numpy().astype(np.float64)
+                mi = np.nan_to_num(mi, nan=0.0)
+                mi = np.clip(mi, 0.0, 1.0)
+                if mi.shape != (H, W):
+                    zy, zx = H / mi.shape[0], W / mi.shape[1]
+                    mi = zoom(mi, (zy, zx), order=1, mode="nearest")
+                    mi = mi[:H, :W]
+                    mi = np.clip(mi, 0.0, 1.0)
+                # Intensity floor + response contrast (Jeremie's gate calls,
+                # spec section 11): gamma FIRST (mask_gamma != 1 pulls the
+                # feathered mid greys toward the floor, white stays 1), then
+                # the floor remap. mask_gamma = 1 skips the power op entirely
+                # so the linear regime stays bitwise; mask_min = 0 restores
+                # the hard gate and every m==0 exactness contract with it.
+                # This exact op order is the teeth's remap law (W14).
+                mg_f = float(mask_gamma)
+                if mg_f != 1.0:
+                    mi = np.power(mi, max(mg_f, 1e-6))
+                mm_f = float(np.clip(mask_min, 0.0, 1.0))
+                mi = mm_f + mi * (1.0 - mm_f)
+                if not black_warned and float(mi.max()) == 0.0:
+                    print("[Darkroom] Water Refraction: mask is fully black, "
+                          "output equals input")
+                    black_warned = True
+
             out = render_auto(img, h_mm, field_width_mm, aperture_ratio=aperture,
                          samples=int(aperture_samples), depth_scale=depth_scale,
                          env_strength=env_strength, dispersion=bool(dispersion),
-                         seed=s)
+                         seed=s, mask=mi)
             deficit = grain_deficit(img.shape, h_mm, field_width_mm,
-                                    aperture_ratio=aperture, seed=s + 21)
+                                    aperture_ratio=aperture, seed=s + 21,
+                                    depth_scale=depth_scale, mask=mi)
             if grain_restore > 0.0:
                 out = restore_grain(out, img, deficit,
                                     amount=float(grain_restore), seed=s + 5)
+            if mi is not None:
+                # IMAGE select (§1c/§7.7): once per frame, after restore_grain,
+                # against the pristine 3-channel float64 frame.
+                out = np.where((mi == 0.0)[..., None], img, out)
             out_imgs.append(out.astype(np.float32))
             out_masks.append(torch.from_numpy(deficit).unsqueeze(0))
 

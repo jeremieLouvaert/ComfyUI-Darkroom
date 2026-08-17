@@ -1,4 +1,9 @@
 """
+FROZEN ORACLE — verbatim copy of utils/water_refraction.py at v1.20.0 (main 4032b0a),
+vendored PRE-BUILD for the slice-3 mask teeth (docs/water-mask-derivation.md §7.11).
+Only the lazy relative import in restore_grain is patched to resolve from tools/.
+Do not edit; it exists so W1/W13 compare the build against what actually shipped.
+
 Water Refraction engine — exact Snell through a simulated free surface.
 
 Full derivation: docs/water-refraction-derivation.md. What makes this not a
@@ -463,35 +468,10 @@ def _sample(img, ys, xs, order=3):
     return out
 
 
-def _masked_offsets(h_mm, field_width_mm, m, ior=N_WATER, depth_scale=1.0):
-    """
-    Declared seam, numpy engine (docs/water-mask-derivation.md §7.8): the jitter
-    Jacobian computed from the MASKED preimage map (m*dxp + x, m*dyp + y), the
-    literal op sequence `render` uses when a mask is present. `render` calls this
-    directly rather than inlining it, so the two cannot drift (W5).
-    """
-    dxp, dyp, _ = refraction_offsets(h_mm, field_width_mm, ior=ior,
-                                     depth_scale=depth_scale)
-    H, W = dxp.shape
-    dxp_m = m * dxp
-    dyp_m = m * dyp
-    sx = dxp_m + np.arange(W)[None, :]
-    sy = dyp_m + np.arange(H)[:, None]
-    sxy, sxx = np.gradient(sx)
-    syy, syx = np.gradient(sy)
-    m2 = np.abs(sxx * syy - sxy * syx)
-    jamp_m = np.sqrt(np.maximum(1.0 - 1.0 / np.maximum(m2, 1e-9), 0.0))
-    # The masked PRODUCTS go back (spec W5's contract). The render never samples
-    # them -- it samples the unmasked field and multiplies the sampled values at
-    # the destination pixel (section 1); these exist so the tooth can pin the
-    # multiply bitwise.
-    return dxp_m, dyp_m, jamp_m
-
-
 def render(img, h_mm, field_width_mm, *, aperture_ratio=0.020, samples=32,
            ior=N_WATER, depth_scale=1.0, fresnel=True,
            env_color=(0.75, 0.78, 0.82), env_strength=1.0, dispersion=False,
-           order=3, seed=0, pixel_aa=True, mask=None):
+           order=3, seed=0, pixel_aa=True):
     """
     Refract `img` (H,W,3 in [0,1]) through the surface, with a finite aperture.
 
@@ -507,12 +487,6 @@ def render(img, h_mm, field_width_mm, *, aperture_ratio=0.020, samples=32,
     because bilinear retains only (2/3)^2 of a white-noise variance at a random
     sub-pixel position — a flat ~33% loss of film grain on every displaced pixel
     regardless of what the water is doing. Cubic recovers most of it for free.
-
-    `mask`, if given, is a 2-D float array (destination resolution) that scales
-    the sampled displacement, the jitter Jacobian, and the Fresnel sheen at each
-    output pixel (docs/water-mask-derivation.md). `mask=None` runs the exact
-    unmasked arithmetic below, byte for byte. The IMAGE select at m=0 is a
-    NODE-level concern, not this function's (spec §7.7).
     """
     H, W = img.shape[:2]
     mm_per_px = field_width_mm / W
@@ -530,29 +504,20 @@ def render(img, h_mm, field_width_mm, *, aperture_ratio=0.020, samples=32,
             cos_i = ci_map
         rho = (aperture_ratio * h) / mm_per_px
 
-        if mask is None:
-            # How wide the pixel's preimage is, in SOURCE pixels: m = sqrt(|det J|).
-            # Jitter must vanish as m -> 1, because the input image has ALREADY been
-            # through a sensor's own pixel integration -- averaging over a full pixel
-            # again would double-count it and blur an undistorted image. That is not
-            # hypothetical: applying the jitter unconditionally broke invariant I3,
-            # flat water is a bit-exact identity, by 4.3e-1. Only the EXCESS over one
-            # source pixel needs integrating, which is what the sqrt(1 - 1/m^2) factor
-            # is: exactly 0 at m = 1, tending to 1 under strong compression.
-            _sx = dxp + np.arange(W)[None, :]
-            _sy = dyp + np.arange(H)[:, None]
-            _sxy, _sxx = np.gradient(_sx)
-            _syy, _syx = np.gradient(_sy)
-            _m2 = np.abs(_sxx * _syy - _sxy * _syx)          # |det J|, = m^2
-            jitter_amp = np.sqrt(np.maximum(1.0 - 1.0 / np.maximum(_m2, 1e-9), 0.0))
-        else:
-            # Masked Jacobian (§2): jitter from the MASKED preimage map, via the
-            # declared seam, so it cannot drift from what the seam's own tooth
-            # checks. dxp/dyp stay the UNMASKED field from above: the multiply
-            # happens on the SAMPLED values at the destination pixel, never on
-            # the field (section 1 -- field scaling is the rejected model).
-            _, _, jitter_amp = _masked_offsets(h_mm, field_width_mm, mask,
-                                              ior=n_w, depth_scale=depth_scale)
+        # How wide the pixel's preimage is, in SOURCE pixels: m = sqrt(|det J|).
+        # Jitter must vanish as m -> 1, because the input image has ALREADY been
+        # through a sensor's own pixel integration -- averaging over a full pixel
+        # again would double-count it and blur an undistorted image. That is not
+        # hypothetical: applying the jitter unconditionally broke invariant I3,
+        # flat water is a bit-exact identity, by 4.3e-1. Only the EXCESS over one
+        # source pixel needs integrating, which is what the sqrt(1 - 1/m^2) factor
+        # is: exactly 0 at m = 1, tending to 1 under strong compression.
+        _sx = dxp + np.arange(W)[None, :]
+        _sy = dyp + np.arange(H)[:, None]
+        _sxy, _sxx = np.gradient(_sx)
+        _syy, _syx = np.gradient(_sy)
+        _m2 = np.abs(_sxx * _syy - _sxy * _syx)          # |det J|, = m^2
+        jitter_amp = np.sqrt(np.maximum(1.0 - 1.0 / np.maximum(_m2, 1e-9), 0.0))
         if not pixel_aa:
             jitter_amp = np.zeros_like(jitter_amp)
         chan = np.zeros_like(img, dtype=np.float64)
@@ -573,12 +538,7 @@ def render(img, h_mm, field_width_mm, *, aperture_ratio=0.020, samples=32,
             qx = px + rad * math.cos(ang) * rho
             dxs = map_coordinates(dxp, [qy, qx], order=1, mode="nearest")
             dys = map_coordinates(dyp, [qy, qx], order=1, mode="nearest")
-            if mask is None:
-                chan += _sample(img, py + dys, px + dxs, order=order)
-            else:
-                # Per-sample multiply at the DESTINATION pixel (§1/§7.4): m is
-                # never resampled at the footprint point q.
-                chan += _sample(img, py + mask * dys, px + mask * dxs, order=order)
+            chan += _sample(img, py + dys, px + dxs, order=order)
         chan /= max(1, int(samples))
         if dispersion:
             acc[..., ci] = chan[..., ci]
@@ -587,8 +547,6 @@ def render(img, h_mm, field_width_mm, *, aperture_ratio=0.020, samples=32,
 
     if fresnel:
         R = R0 + (1.0 - R0) * (1.0 - np.clip(cos_i, 0.0, 1.0)) ** 5
-        if mask is not None:
-            R = mask * R          # Fresnel gate (§3/§7.6): m at the destination pixel.
         env = np.array(env_color, dtype=np.float64)[None, None, :] * env_strength
         acc = (1.0 - R[..., None]) * acc + R[..., None] * env
     return np.clip(acc, 0.0, 1.0)
@@ -602,61 +560,10 @@ def _torch_ok():
         return False
 
 
-def _masked_offsets_gpu(h_mm, field_width_mm, m, ior=N_WATER, depth_scale=1.0):
-    """
-    Declared seam, GPU engine (docs/water-mask-derivation.md §7.8): float32 CUDA
-    tensors, the literal op sequence `render_gpu` uses when a mask is present.
-    Standalone (not a closure over `render_gpu`'s state) so it is callable without
-    execute() and `render_gpu` calls it rather than inlining it (W5, per engine --
-    the numpy and GPU jitter amplitudes differ by 1.1e-3 and cannot share a seam).
-    """
-    import torch
-
-    dev = "cuda"
-    H, W = h_mm.shape[0], h_mm.shape[1]
-    mm_per_px = field_width_mm / W
-    hh = torch.tensor(np.ascontiguousarray(h_mm), dtype=torch.float32, device=dev)
-    h_s = torch.clamp(hh * depth_scale, min=0.0)
-    t_m = torch.tensor(np.ascontiguousarray(m), dtype=torch.float32, device=dev)
-
-    yy, xx = torch.meshgrid(torch.arange(H, device=dev, dtype=torch.float32),
-                            torch.arange(W, device=dev, dtype=torch.float32),
-                            indexing="ij")
-
-    gy = torch.zeros_like(h_s)
-    gx = torch.zeros_like(h_s)
-    gy[1:-1, :] = (h_s[2:, :] - h_s[:-2, :]) / (2 * mm_per_px)
-    gy[0, :] = (h_s[1, :] - h_s[0, :]) / mm_per_px
-    gy[-1, :] = (h_s[-1, :] - h_s[-2, :]) / mm_per_px
-    gx[:, 1:-1] = (h_s[:, 2:] - h_s[:, :-2]) / (2 * mm_per_px)
-    gx[:, 0] = (h_s[:, 1] - h_s[:, 0]) / mm_per_px
-    gx[:, -1] = (h_s[:, -1] - h_s[:, -2]) / mm_per_px
-
-    g = torch.sqrt(gx * gx + gy * gy)
-    th_i = torch.atan(g)
-    th_t = torch.asin(torch.clamp(torch.sin(th_i) / ior, -1.0, 1.0))
-    dpx = (h_s * torch.tan(th_i - th_t)) / mm_per_px
-    inv = torch.where(g > 1e-12, 1.0 / torch.clamp(g, min=1e-12), torch.zeros_like(g))
-    dxp = dpx * gx * inv
-    dyp = dpx * gy * inv
-
-    dxp_m = t_m * dxp
-    dyp_m = t_m * dyp
-    sx = dxp_m + xx
-    sy = dyp_m + yy
-    sxy, sxx_ = torch.gradient(sx, dim=(0, 1))
-    syy_, syx = torch.gradient(sy, dim=(0, 1))
-    m2 = torch.abs(sxx_ * syy_ - sxy * syx)
-    jamp_m = torch.sqrt(torch.clamp(1.0 - 1.0 / torch.clamp(m2, min=1e-9), min=0.0))
-    # Masked products returned per spec W5; render_gpu samples the unmasked
-    # field and multiplies sampled values at the destination (section 1).
-    return dxp_m, dyp_m, jamp_m
-
-
 def render_gpu(img, h_mm, field_width_mm, *, aperture_ratio=0.020, samples=32,
                ior=N_WATER, depth_scale=1.0, fresnel=True,
                env_color=(0.75, 0.78, 0.82), env_strength=1.0, dispersion=False,
-               seed=0, pixel_aa=True, mask=None):
+               seed=0, pixel_aa=True):
     """
     The same optics on the GPU. Identical maths to `render`, expressed in torch.
 
@@ -670,10 +577,6 @@ def render_gpu(img, h_mm, field_width_mm, *, aperture_ratio=0.020, samples=32,
     float32 here, so results are not bit-identical to the numpy path -- which is
     why the invariant suite is built on physics rather than pixels, and why the
     numpy `render` is kept as the reference the teeth check against.
-
-    `mask`, if given, is the same 2-D float array `render` takes (numpy float64);
-    converted to a float32 CUDA tensor here alongside `h_mm`. `mask=None` runs the
-    exact unmasked arithmetic below.
     """
     import torch
     import torch.nn.functional as Fn
@@ -685,8 +588,6 @@ def render_gpu(img, h_mm, field_width_mm, *, aperture_ratio=0.020, samples=32,
                          device=dev).permute(2, 0, 1).unsqueeze(0)
     hh = torch.tensor(np.ascontiguousarray(h_mm), dtype=torch.float32, device=dev)
     h_s = torch.clamp(hh * depth_scale, min=0.0)
-    t_m = (None if mask is None else
-           torch.tensor(np.ascontiguousarray(mask), dtype=torch.float32, device=dev))
 
     yy, xx = torch.meshgrid(torch.arange(H, device=dev, dtype=torch.float32),
                             torch.arange(W, device=dev, dtype=torch.float32),
@@ -730,20 +631,13 @@ def render_gpu(img, h_mm, field_width_mm, *, aperture_ratio=0.020, samples=32,
         dxp, dyp, ci_map = offsets(n_w)
         if cos_i is None:
             cos_i = ci_map
-        if mask is None:
-            # preimage jitter amplitude from |det J|, exactly as the numpy path
-            sx = dxp + xx
-            sy = dyp + yy
-            sxy, sxx_ = torch.gradient(sx, dim=(0, 1))
-            syy_, syx = torch.gradient(sy, dim=(0, 1))
-            m2 = torch.abs(sxx_ * syy_ - sxy * syx)
-            jamp = torch.sqrt(torch.clamp(1.0 - 1.0 / torch.clamp(m2, min=1e-9), min=0.0))
-        else:
-            # Masked Jacobian (§2), via the declared GPU seam. dxp/dyp stay the
-            # UNMASKED field: the multiply happens on sampled values at the
-            # destination pixel, never on the field (section 1).
-            _, _, jamp = _masked_offsets_gpu(h_mm, field_width_mm, mask,
-                                             ior=n_w, depth_scale=depth_scale)
+        # preimage jitter amplitude from |det J|, exactly as the numpy path
+        sx = dxp + xx
+        sy = dyp + yy
+        sxy, sxx_ = torch.gradient(sx, dim=(0, 1))
+        syy_, syx = torch.gradient(sy, dim=(0, 1))
+        m2 = torch.abs(sxx_ * syy_ - sxy * syx)
+        jamp = torch.sqrt(torch.clamp(1.0 - 1.0 / torch.clamp(m2, min=1e-9), min=0.0))
         if not pixel_aa:
             jamp = torch.zeros_like(jamp)
         rho = (aperture_ratio * h_s) / mm_per_px
@@ -757,11 +651,7 @@ def render_gpu(img, h_mm, field_width_mm, *, aperture_ratio=0.020, samples=32,
             qy = py + rad * math.sin(ang) * rho
             qx = px + rad * math.cos(ang) * rho
             ds = samp(d4, qy, qx)
-            if mask is None:
-                chan = chan + samp(t_img, py + ds[0, 1], px + ds[0, 0])
-            else:
-                # Per-sample multiply at the DESTINATION pixel (§1/§7.4).
-                chan = chan + samp(t_img, py + t_m * ds[0, 1], px + t_m * ds[0, 0])
+            chan = chan + samp(t_img, py + ds[0, 1], px + ds[0, 0])
         chan = chan / max(1, int(samples))
         if dispersion:
             acc[:, ci] = chan[:, ci]
@@ -770,19 +660,17 @@ def render_gpu(img, h_mm, field_width_mm, *, aperture_ratio=0.020, samples=32,
 
     if fresnel:
         R = R0 + (1.0 - R0) * (1.0 - torch.clamp(cos_i, 0.0, 1.0)) ** 5
-        if t_m is not None:
-            R = t_m * R          # Fresnel gate (§3/§7.6): m at the destination pixel.
         env = torch.tensor(env_color, dtype=torch.float32,
                            device=dev).view(1, 3, 1, 1) * env_strength
         acc = (1.0 - R) * acc + R * env
     return torch.clamp(acc, 0.0, 1.0).squeeze(0).permute(1, 2, 0).cpu().numpy().astype(np.float64)
 
 
-def render_auto(img, h_mm, field_width_mm, *, mask=None, **kw):
+def render_auto(img, h_mm, field_width_mm, **kw):
     """GPU when there is one, the numpy reference otherwise. Same physics either way."""
     if _torch_ok():
-        return render_gpu(img, h_mm, field_width_mm, mask=mask, **kw)
-    return render(img, h_mm, field_width_mm, mask=mask, **kw)
+        return render_gpu(img, h_mm, field_width_mm, **kw)
+    return render(img, h_mm, field_width_mm, **kw)
 
 
 def jacobian_det(h_mm, field_width_mm, ior=N_WATER, depth_scale=1.0):
@@ -830,8 +718,7 @@ def trace_reference(h_mm, field_width_mm, iy, ix, ior=N_WATER, depth_scale=1.0):
 # ===========================================================================
 
 def grain_deficit(img_shape, h_mm, field_width_mm, *, aperture_ratio=0.020,
-                  samples=12, order=3, seed=21, smooth_px=6.0,
-                  depth_scale=1.0, mask=None):
+                  samples=12, order=3, seed=21, smooth_px=6.0):
     """
     How much fine detail the warp destroyed, per pixel, in [0,1].
 
@@ -844,18 +731,12 @@ def grain_deficit(img_shape, h_mm, field_width_mm, *, aperture_ratio=0.020,
     It is NOT a physical capture-grain layer and must not be described as one.
     Chain it into a grain node's strength — Film Grain Pro is the intended
     partner — rather than baking grain in here.
-
-    `depth_scale` must match the image render's, or the probe measures a
-    DIFFERENT warp than the image took (docs/water-mask-derivation.md §7.12a).
-    `mask`, if given, is forwarded to the probe render (§4) and then gates the
-    returned deficit to exactly 0 at m=0.
     """
     H, W = img_shape[:2]
     rng = np.random.default_rng(int(seed) & 0x7FFFFFFF)
     probe = np.repeat(rng.normal(0.5, 0.05, (H, W, 1)), 3, axis=2)
     warped = render_auto(probe, h_mm, field_width_mm, aperture_ratio=aperture_ratio,
-                         samples=samples, fresnel=False, seed=seed,
-                         depth_scale=depth_scale, mask=mask)
+                         samples=samples, fresnel=False, seed=seed)
 
     def hf(a):
         g = a.mean(axis=2)
@@ -870,12 +751,7 @@ def grain_deficit(img_shape, h_mm, field_width_mm, *, aperture_ratio=0.020,
     ref = hf(probe)
     r = np.clip(gaussian_filter(hf(warped) / np.maximum(ref, 1e-9), smooth_px),
                 0.0, 1.0)
-    d = np.sqrt(np.maximum(1.0 - r * r, 0.0)).astype(np.float32)
-    if mask is not None:
-        # deficit select (§4): {deficit > 0} subset {m > 0}, exact. Pin float32 --
-        # np.where with a float64 scalar silently upcasts.
-        d = np.where(mask == 0.0, 0, d).astype(np.float32)
-    return d
+    return np.sqrt(np.maximum(1.0 - r * r, 0.0)).astype(np.float32)
 
 
 def _hf_rms(a, sigma=1.2, win=10.0):
@@ -909,7 +785,11 @@ def restore_grain(rendered, source, deficit, amount=1.0, grain_size=1.2,
     """
     import torch
 
-    from .grain_newson import render_film_grain
+    # frozen-copy patch: resolve grain_newson from the pack this file sits inside
+    import os as _os
+    from importlib import import_module as _im
+    _pkg = _os.path.basename(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+    render_film_grain = _im(f"{_pkg}.utils.grain_newson").render_film_grain
 
     t = torch.from_numpy(np.ascontiguousarray(rendered)).float()
     full = render_film_grain(t, grain_size=grain_size, radius_variation=0.0,
