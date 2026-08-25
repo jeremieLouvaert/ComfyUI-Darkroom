@@ -5,32 +5,19 @@
 // darkroom_log_wheels.js and darkroom_three_way.js; any future polar grading
 // node should register here rather than copy this.
 //
-// ARCHITECTURE, and the two rules that must not be broken:
-//
-// 1. The wheel is a VIEW. The float widgets are the only state. The controller
-//    reads them every draw and writes back on edit (`.value` always, so the
-//    slider readout tracks live; `.callback` once on release, since a bare
-//    `value =` set does not fire reactivity). No INPUT_TYPES change, so stored
-//    workflows and API-format prompts are untouched, and deleting the .js
-//    leaves a working slider node.
-//
-// 2. The controller is NOT a LiteGraph widget and must never enter
-//    node.widgets. LiteGraph saves widgets_values BY INDEX skipping
-//    serialize===false widgets, but loads it SEQUENTIALLY with the same skip:
-//      save: for (const [i,w] of widgets.entries()) { if (w.serialize===false) continue; vals[i]=w.value }
-//      load: let t=0; for (const w of widgets) if (w.serialize!==false) w.value=vals[t++]
-//    Those agree only when the non-serialised widget is LAST, so a widget
-//    anywhere else silently shifts every later value by one slot on load.
-//    (`options.serialize` is not consulted by configure() at all.) Measured on
-//    frontend 1.48.7; it is what the FieldGradient v0.6.1 fix was about.
-//    Space is reserved with `widgets_start_y`, which only works at the TOP of
-//    the widget stack -- a canvas cannot be injected mid-stack.
+// See darkroom_canvas_widget.js for the attach and serialisation rules (the
+// canvas is a view; it must never enter node.widgets). This file only owns
+// disc geometry and painting.
 //
 // Mapping is a stated convention matching the nodes' own tooltips:
 //   hue 0 (red) at 3 o'clock, increasing counter-clockwise, atan2(-dy, dx)
 //   radius 0..1 -> saturation/intensity 0..satMax, both quantised to integers
 
-import { app } from "../../scripts/app.js";
+import {
+  clamp, findWidget, readVal, writeVal, hsv2rgb, registerCanvasNode,
+} from "./darkroom_canvas_widget.js";
+
+export { clamp, findWidget, readVal, writeVal, hsv2rgb };
 
 // --- layout -----------------------------------------------------------------
 
@@ -64,63 +51,10 @@ const FINE_SCALE = 0.25;    // shift-drag multiplier
 
 // --- helpers ----------------------------------------------------------------
 
-export function clamp(v, lo, hi) {
-  return v < lo ? lo : v > hi ? hi : v;
-}
-
-export function findWidget(node, name) {
-  return node.widgets ? node.widgets.find((w) => w.name === name) : undefined;
-}
-
-export function readVal(node, name, dflt) {
-  const w = findWidget(node, name);
-  const v = w ? Number(w.value) : NaN;
-  return Number.isFinite(v) ? v : dflt;
-}
-
-export function writeVal(node, name, v, commit, tag) {
-  const w = findWidget(node, name);
-  if (!w) return;
-  w.value = v;
-  if (commit && typeof w.callback === "function") {
-    try {
-      w.callback(v, app.canvas, node);
-    } catch (e) {
-      console.warn("[Darkroom] " + (tag || "wheels") + ": callback threw for " + name, e);
-    }
-  }
-}
-
-export function hsv2rgb(h, s, v) {
-  const c = v * s;
-  const hp = ((((h % 360) + 360) % 360)) / 60;
-  const x = c * (1 - Math.abs((hp % 2) - 1));
-  let r = 0, g = 0, b = 0;
-  if (hp < 1) { r = c; g = x; }
-  else if (hp < 2) { r = x; g = c; }
-  else if (hp < 3) { g = c; b = x; }
-  else if (hp < 4) { g = x; b = c; }
-  else if (hp < 5) { r = x; b = c; }
-  else { r = c; b = x; }
-  const m = v - c;
-  return [(r + m) * 255, (g + m) * 255, (b + m) * 255];
-}
-
 export function wheelDiameter(widgetWidth, n) {
   const count = n || 3;
   const avail = Math.max(1, widgetWidth - SIDE_PAD * 2 - WHEEL_GAP * (count - 1));
   return Math.max(MIN_D, Math.min(MAX_D, Math.floor(avail / count)));
-}
-
-// onDrawForeground draws from the node BODY origin, which is also where
-// LiteGraph lays out the socket rows. Modern ComfyUI lists EVERY widget in
-// node.inputs as well, so count only inputs without a `.widget` back-reference
-// or a 14-widget node reserves 14 rows and opens a ~290px void.
-export function topY(node) {
-  const socketIns = (node.inputs || []).filter((i) => !i.widget).length;
-  const rows = Math.max(socketIns, node.outputs ? node.outputs.length : 0);
-  const slotH = (typeof LiteGraph !== "undefined" && LiteGraph.NODE_SLOT_HEIGHT) || 20;
-  return rows * slotH + 6;
 }
 
 // --- the hue/saturation disc, pre-rendered once per pixel diameter ----------
@@ -218,6 +152,13 @@ export function createWheelController(node, spec) {
     _hue: 0,      // held so a centre-snap does not lose the hue direction
     _lastPx: null,
     _lastPy: null,
+
+    dragging() { return this.drag !== null; },
+    syncedWidgets() {
+      const out = [];
+      for (const z of spec.zones) for (const n of [z.hue, z.sat, z.bar]) if (n) out.push(n);
+      return out;
+    },
 
     computeSize(width) {
       const w = width || (node.size && node.size[0]) || 420;
@@ -515,109 +456,13 @@ export function createWheelController(node, spec) {
   };
 }
 
-// --- attach -----------------------------------------------------------------
+// --- registration -----------------------------------------------------------
 
-export function attachWheels(node, spec) {
-  if (node._darkroomWheelsAttached) return true;
-
-  const anchor = findWidget(node, spec.zones[0].hue);
-  if (!anchor) return false;   // widgets not built yet -- caller retries
-
-  node._darkroomWheelsAttached = true;
-
-  const ctrl = createWheelController(node, spec);
-  node._darkroomWheels = ctrl;
-
-  // NOT added to node.widgets -- see the header. Space comes from
-  // widgets_start_y, so the wheels sit above the whole slider stack.
-  const minW = spec.minWidth || 420;
-  const reserve = () => {
-    node.widgets_start_y = topY(node) + widgetHeight(spec, Math.max(node.size[0] || minW, minW));
-  };
-  reserve();
-
-  const origDraw = node.onDrawForeground;
-  node.onDrawForeground = function (ctx, canvas) {
-    const r = origDraw ? origDraw.apply(this, arguments) : undefined;
-    if (this.flags && this.flags.collapsed) return r;
-    reserve();
-    ctrl.draw(ctx, this, this.size[0], topY(this), 0);
-    return r;
-  };
-
-  const origDown = node.onMouseDown;
-  node.onMouseDown = function (e, pos, canvas) {
-    if (ctrl.mouse({ type: "pointerdown", shiftKey: !!(e && e.shiftKey) }, pos, this)) {
-      if (typeof this.captureInput === "function") this.captureInput(true);
-      return true;
-    }
-    return origDown ? origDown.apply(this, arguments) : false;
-  };
-
-  const origMove = node.onMouseMove;
-  node.onMouseMove = function (e, pos, canvas) {
-    if (ctrl.drag) {
-      ctrl.mouse({ type: "pointermove", shiftKey: !!(e && e.shiftKey) }, pos, this);
-      return true;
-    }
-    return origMove ? origMove.apply(this, arguments) : undefined;
-  };
-
-  const origUp = node.onMouseUp;
-  node.onMouseUp = function (e, pos, canvas) {
-    if (ctrl.drag) {
-      ctrl.mouse({ type: "pointerup", shiftKey: !!(e && e.shiftKey) }, pos, this);
-      if (typeof this.captureInput === "function") this.captureInput(false);
-      return true;
-    }
-    return origUp ? origUp.apply(this, arguments) : undefined;
-  };
-
-  // Reverse sync: editing a slider by hand must move the dot. draw() already
-  // reads the float widgets every frame, so this only forces a repaint (while
-  // preserving the original callback's return value).
-  for (const zone of spec.zones) {
-    for (const name of [zone.hue, zone.sat, zone.bar]) {
-      if (!name) continue;
-      const w = findWidget(node, name);
-      if (!w || w._darkroomWheelHooked) continue;
-      w._darkroomWheelHooked = true;
-      const orig = w.callback;
-      w.callback = function (value, ...rest) {
-        const out = orig ? orig.apply(this, [value, ...rest]) : undefined;
-        node.setDirtyCanvas(true, true);
-        return out;
-      };
-    }
-  }
-
-  // Widen enough for the wheel row, without shrinking a saved size.
-  try {
-    const need = node.computeSize();
-    node.setSize([
-      Math.max(node.size[0] || 0, minW),
-      Math.max(node.size[1] || 0, need[1]),
-    ]);
-  } catch (e) {
-    console.warn("[Darkroom] " + spec.tag + ": resize failed", e);
-  }
-
-  node.setDirtyCanvas(true, true);
-  return true;
-}
-
-// Register a node type against a spec. Handles the one-tick-late widget build.
 export function registerWheelNode(nodeTypeName, spec) {
-  app.registerExtension({
-    name: "AKURATE.Darkroom" + spec.tag,
-    async beforeRegisterNodeDef(nodeType, nodeData, _app) {
-      if (nodeData.name !== nodeTypeName) return;
-      const orig = nodeType.prototype.onNodeCreated;
-      nodeType.prototype.onNodeCreated = function () {
-        const r = orig ? orig.apply(this, arguments) : undefined;
-        if (!attachWheels(this, spec)) setTimeout(() => attachWheels(this, spec), 0);
-        return r;
-      };
-    },
-  });
+  registerCanvasNode(
+    nodeTypeName,
+    "AKURATE.Darkroom" + spec.tag,
+    (node) => createWheelController(node, spec),
+    { tag: spec.tag, minWidth: spec.minWidth || 420, requireWidget: spec.zones[0].hue },
+  );
 }
