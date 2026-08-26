@@ -16,6 +16,9 @@
 import {
   clamp, findWidget, readVal, writeVal, hsv2rgb, registerCanvasNode,
 } from "./darkroom_canvas_widget.js";
+import {
+  wheelToChannels, channelsToWheel, quantise, barToMaster, masterToBar,
+} from "./darkroom_lumanull.js";
 
 export { clamp, findWidget, readVal, writeVal, hsv2rgb };
 
@@ -133,6 +136,70 @@ export function widgetHeight(spec, widgetWidth) {
          LABEL_GAP + LABEL_H + (spec.preset ? CAPTION_H : 0) + BOTTOM_PAD;
 }
 
+
+// --- zone accessors: POLAR vs CARTESIAN -------------------------------------
+//
+// Polar zones (Log Wheels, 3-Way) drive a hue widget and a saturation widget
+// directly -- the widgets already ARE a wheel position.
+//
+// Cartesian zones (Lift Gamma Gain) drive three channel widgets through the
+// luma-null basis derived in docs/lgg-wheel-derivation.md. The wheel is
+// chroma-only; the bar is that group's only luminance control.
+
+function zoneRead(node, zone, satMax) {
+  if (!zone.cartesian) {
+    return {
+      hue: readVal(node, zone.hue, 0),
+      sat: clamp(readVal(node, zone.sat, 0), 0, satMax),
+    };
+  }
+  const vals = zone.channels.map((n) => readVal(node, n, zone.mul ? 1 : 0));
+  const w = channelsToWheel(vals, zone.amp, !!zone.mul);
+  return { hue: w.hue, sat: w.radius * satMax };
+}
+
+function zoneWrite(node, zone, hue, sat, satMax, commit, tag) {
+  if (!zone.cartesian) {
+    writeVal(node, zone.hue, hue, commit, tag);
+    writeVal(node, zone.sat, clamp(Math.round(sat), 0, satMax), commit, tag);
+    return;
+  }
+  // 4 dp, NOT the slider's step -- step-aligned writes cost up to 8 degrees of
+  // hue on the round trip, worst at the small radii a colourist works in.
+  // Derivation 7.1; ComfyUI validates only min/max for FLOAT, never step.
+  const ch = wheelToChannels(hue, sat / satMax, zone.amp, !!zone.mul);
+  for (let i = 0; i < zone.channels.length; i++) {
+    writeVal(node, zone.channels[i], quantise(ch[i]), commit, tag);
+  }
+}
+
+// Bar position (what the widget stores) <-> bar track value in [barMin,barMax].
+// For multiplicative groups the widget holds a MULTIPLIER and the track holds
+// t in [-1,1] with master = exp(t*ln K), so the centre is exactly neutral. A
+// linear track would put neutral 1.0 at 23% of gamma's [0.1,4] slider.
+function barRead(node, zone) {
+  const raw = readVal(node, zone.bar, zone.barLog ? 1 : 0);
+  return zone.barLog ? masterToBar(raw, true) : raw;
+}
+
+function barWrite(node, zone, t, commit, tag) {
+  if (!zone.barLog) {
+    const lo = zone.barMin != null ? zone.barMin : -100;
+    const hi = zone.barMax != null ? zone.barMax : 100;
+    const v = zone.cartesian ? quantise(clamp(t, lo, hi)) : clamp(Math.round(t), lo, hi);
+    writeVal(node, zone.bar, v, commit, tag);
+    return;
+  }
+  const v = barToMaster(t, true, zone.barWidgetMin, zone.barWidgetMax);
+  writeVal(node, zone.bar, quantise(v), commit, tag);
+}
+
+function barBounds(zone) {
+  if (zone.barLog) return [-1, 1];
+  return [zone.barMin != null ? zone.barMin : -100,
+          zone.barMax != null ? zone.barMax : 100];
+}
+
 export function createWheelController(node, spec) {
   const satMax = spec.satMax || 100;
 
@@ -156,7 +223,11 @@ export function createWheelController(node, spec) {
     dragging() { return this.drag !== null; },
     syncedWidgets() {
       const out = [];
-      for (const z of spec.zones) for (const n of [z.hue, z.sat, z.bar]) if (n) out.push(n);
+      for (const z of spec.zones) {
+        if (z.cartesian) { for (const n of z.channels) out.push(n); }
+        else { if (z.hue) out.push(z.hue); if (z.sat) out.push(z.sat); }
+        if (z.bar) out.push(z.bar);
+      }
       return out;
     },
 
@@ -203,8 +274,9 @@ export function createWheelController(node, spec) {
           ctx.moveTo(cx, cy - 3.5); ctx.lineTo(cx, cy + 3.5);
           ctx.stroke();
 
-          const hue = readVal(node, zone.hue, 0);
-          const sat = readVal(node, zone.sat, 0);
+          const zr = zoneRead(node, zone, satMax);
+          const hue = zr.hue;
+          const sat = zr.sat;
 
           const rad = clamp(sat / satMax, 0, 1) * r;
           const a = (hue * Math.PI) / 180;
@@ -235,9 +307,9 @@ export function createWheelController(node, spec) {
           let barVal = 0;
 
           if (zone.bar) {
-            const lo = zone.barMin != null ? zone.barMin : -100;
-            const hi = zone.barMax != null ? zone.barMax : 100;
-            barVal = readVal(node, zone.bar, 0);
+            const bb = barBounds(zone);
+            const lo = bb[0], hi = bb[1];
+            barVal = barRead(node, zone);
             const midX = barX + barW * ((0 - lo) / (hi - lo));
 
             ctx.fillStyle = "#1b1b1b";
@@ -326,27 +398,26 @@ export function createWheelController(node, spec) {
         const px = mag * (g ? g.r : 1);
         let sat, hue;
         if (px <= CENTER_SNAP_PX) {
-          sat = 0;              // snap the zone fully off (below the >=0.5 backend gate)
+          sat = 0;              // snap the zone fully off (exact identity)
           hue = this._hue;      // hold direction so leaving centre does not jump
         } else {
           sat = clamp(mag, 0, 1) * satMax;
           hue = (Math.atan2(-this._ny, this._nx) * 180) / Math.PI;
           this._hue = hue;
         }
-        hue = ((Math.round(hue) % 360) + 360) % 360;
-        writeVal(node, zone.hue, hue, commit, spec.tag);
-        writeVal(node, zone.sat, clamp(Math.round(sat), 0, satMax), commit, spec.tag);
+        hue = ((hue % 360) + 360) % 360;
+        if (!zone.cartesian) hue = Math.round(hue);
+        zoneWrite(node, zone, hue, sat, satMax, commit, spec.tag);
       } else {
-        const lo = zone.barMin != null ? zone.barMin : -100;
-        const hi = zone.barMax != null ? zone.barMax : 100;
+        const bb = barBounds(zone);
         let v = this._bar;
         const g = this.geo[drag.idx];
         if (g) {
-          const midX = g.barX + g.barW * ((0 - lo) / (hi - lo));
-          const handleX = g.barX + ((clamp(v, lo, hi) - lo) / (hi - lo)) * g.barW;
+          const midX = g.barX + g.barW * ((0 - bb[0]) / (bb[1] - bb[0]));
+          const handleX = g.barX + ((clamp(v, bb[0], bb[1]) - bb[0]) / (bb[1] - bb[0])) * g.barW;
           if (Math.abs(handleX - midX) <= BAR_SNAP_PX) v = 0;
         }
-        writeVal(node, zone.bar, clamp(Math.round(v), lo, hi), commit, spec.tag);
+        barWrite(node, zone, clamp(v, bb[0], bb[1]), commit, spec.tag);
       }
     },
 
@@ -372,8 +443,8 @@ export function createWheelController(node, spec) {
               px >= g.barX - HIT_SLOP && px <= g.barX + g.barW + HIT_SLOP &&
               py >= g.barY - HIT_SLOP && py <= g.barY + BAR_H + HIT_SLOP
             ) {
-              const lo = zone.barMin != null ? zone.barMin : -100;
-              const hi = zone.barMax != null ? zone.barMax : 100;
+              const bb = barBounds(zone);
+              const lo = bb[0], hi = bb[1];
               this.drag = { kind: "bar", idx: i };
               this._bar = lo + ((px - g.barX) / g.barW) * (hi - lo);
               this._lastPx = px;
@@ -418,8 +489,8 @@ export function createWheelController(node, spec) {
             this._nx = nx;
             this._ny = ny;
           } else {
-            const lo = zone.barMin != null ? zone.barMin : -100;
-            const hi = zone.barMax != null ? zone.barMax : 100;
+            const bb = barBounds(zone);
+            const lo = bb[0], hi = bb[1];
             if (event.shiftKey && this._lastPx != null) {
               this._bar += ((px - this._lastPx) / g.barW) * (hi - lo) * FINE_SCALE;
             } else {
@@ -463,6 +534,10 @@ export function registerWheelNode(nodeTypeName, spec) {
     nodeTypeName,
     "AKURATE.Darkroom" + spec.tag,
     (node) => createWheelController(node, spec),
-    { tag: spec.tag, minWidth: spec.minWidth || 420, requireWidget: spec.zones[0].hue },
+    {
+      tag: spec.tag,
+      minWidth: spec.minWidth || 420,
+      requireWidget: spec.zones[0].cartesian ? spec.zones[0].channels[0] : spec.zones[0].hue,
+    },
   );
 }
