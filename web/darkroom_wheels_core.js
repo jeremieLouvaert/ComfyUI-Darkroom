@@ -19,6 +19,10 @@ import {
 import {
   wheelToChannels, channelsToWheel, quantise, barToMaster, masterToBar,
 } from "./darkroom_lumanull.js";
+import {
+  loadPresets, presetEntry, effectiveValues,
+  GHOST_STROKE, GHOST_DASH,
+} from "./darkroom_presets.js";
 
 export { clamp, findWidget, readVal, writeVal, hsv2rgb };
 
@@ -203,8 +207,39 @@ function barBounds(zone) {
 export function createWheelController(node, spec) {
   const satMax = spec.satMax || 100;
 
+  // Preset tables land asynchronously; the first paint usually beats them.
+  if (spec.preset) {
+    loadPresets(() => { try { node.setDirtyCanvas(true, true); } catch (e) {} });
+  }
+
   return {
     spec,
+
+    // The zone position as it will actually be APPLIED: manual plus whatever
+    // the selected preset does in Python. Returns null when there is nothing
+    // extra to show. Only polar zones ghost -- Lift Gamma Gain is cartesian and
+    // carries no preset widget, so it never reaches here.
+    ghostZone(node, zone) {
+      if (!spec.preset || zone.cartesian) return null;
+      const pw = findWidget(node, spec.preset.widget);
+      const cur = pw ? String(pw.value) : null;
+      const entry = presetEntry(node.comfyClass || node.type, cur);
+      if (!entry) return null;
+
+      const read = (n) => readVal(node, n, 0);
+      const eff = effectiveValues(read, entry, [zone.hue, zone.sat]);
+      const hue = eff[zone.hue];
+      const sat = clamp(eff[zone.sat], 0, satMax);
+      const mHue = read(zone.hue);
+      const mSat = clamp(read(zone.sat), 0, satMax);
+      // A hue difference is invisible at zero radius, so gate on the position
+      // actually moving rather than on either number changing.
+      const a0 = (mHue * Math.PI) / 180, a1 = (hue * Math.PI) / 180;
+      const dx = Math.cos(a1) * sat - Math.cos(a0) * mSat;
+      const dy = Math.sin(a1) * sat - Math.sin(a0) * mSat;
+      if (Math.hypot(dx, dy) < 0.5) return null;
+      return { hue, sat };
+    },
 
     // layout captured each draw() so mouse() hit-tests the same geometry
     lastDrawY: 0,
@@ -252,6 +287,7 @@ export function createWheelController(node, spec) {
         ctx.save();
         this.geo = [];
 
+        let anyGhost = false;
         for (let i = 0; i < zones.length; i++) {
           const zone = zones[i];
           const left = x0 + i * (d + WHEEL_GAP);
@@ -282,6 +318,33 @@ export function createWheelController(node, spec) {
           const a = (hue * Math.PI) / 180;
           const dotX = cx + Math.cos(a) * rad;
           const dotY = cy - Math.sin(a) * rad;
+
+          // --- ghost dot: where the preset actually puts this zone ---
+          // Under the solid dot, hollow and dashed, so the thing you drag stays
+          // visually primary and the thing that ships is still readable.
+          const gz = this.ghostZone(node, zone);
+          if (gz) {
+            anyGhost = true;
+            const grad = clamp(gz.sat / satMax, 0, 1) * r;
+            const ga = (gz.hue * Math.PI) / 180;
+            const gx = cx + Math.cos(ga) * grad;
+            const gy = cy - Math.sin(ga) * grad;
+            ctx.save();
+            ctx.setLineDash(GHOST_DASH);
+            ctx.strokeStyle = GHOST_STROKE;
+            ctx.lineWidth = 1.2;
+            if (grad > 1) {
+              ctx.beginPath();
+              ctx.moveTo(cx, cy);
+              ctx.lineTo(gx, gy);
+              ctx.stroke();
+            }
+            ctx.setLineDash([]);
+            ctx.beginPath();
+            ctx.arc(gx, gy, DOT_R, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.restore();
+          }
 
           if (rad > 1) {
             ctx.strokeStyle = "rgba(255,255,255,0.55)";
@@ -351,9 +414,11 @@ export function createWheelController(node, spec) {
           this.geo.push({ cx, cy, r, barX, barY, barW, hasBar: !!zone.bar });
         }
 
-        // --- preset honesty caption -------------------------------------
-        // These nodes ADD preset values on top of the manual ones, so with a
-        // preset active the dots are not the applied grade. Say so.
+        // --- preset caption -----------------------------------------------
+        // These nodes apply the preset in Python on top of the manual values,
+        // so the solid dots are NOT the applied grade. With the ghost up the
+        // caption becomes its legend; without it (route unreachable, or the
+        // tables still loading) it falls back to the honest warning.
         if (spec.preset) {
           const pw = findWidget(node, spec.preset.widget);
           const cur = pw ? String(pw.value) : spec.preset.custom;
@@ -363,7 +428,9 @@ export function createWheelController(node, spec) {
             ctx.font = "9px sans-serif";
             ctx.fillStyle = "#c9a227";
             const capY = y + widgetHeight(spec, widgetWidth) - BOTTOM_PAD - CAPTION_H / 2;
-            ctx.fillText(spec.preset.caption, SIDE_PAD, capY);
+            ctx.fillText(anyGhost ? "dashed = with preset applied"
+                                  : spec.preset.caption,
+                         SIDE_PAD, capY);
           }
         }
 

@@ -15,6 +15,10 @@
 import {
   clamp, findWidget, readVal, writeVal, hsv2rgb,
 } from "./darkroom_canvas_widget.js";
+import {
+  loadPresets, presetEntry, effectiveValues, differs,
+  GHOST_STROKE, GHOST_DASH,
+} from "./darkroom_presets.js";
 
 // --- layout -----------------------------------------------------------------
 
@@ -144,6 +148,13 @@ export function curveHeight(spec) {
 export function createCurveController(node, spec) {
   const R = spec.range;
 
+  // The preset tables arrive asynchronously and the first paint usually beats
+  // them, so repaint once they land or the ghost never shows until something
+  // else dirties the node.
+  if (spec.preset) {
+    loadPresets(() => { try { node.setDirtyCanvas(true, true); } catch (e) {} });
+  }
+
   return {
     spec,
     geo: null,
@@ -161,6 +172,24 @@ export function createCurveController(node, spec) {
 
     values(node) {
       return spec.points.map((p) => clamp(readVal(node, p.widget, 0), -R, R));
+    },
+
+    // The curve as it will actually be APPLIED: manual offsets plus whatever the
+    // selected preset adds in Python. Null when there is nothing extra to show.
+    ghostValues(node) {
+      if (!spec.preset) return null;
+      const pw = findWidget(node, spec.preset.widget);
+      const cur = pw ? String(pw.value) : null;
+      const entry = presetEntry(node.comfyClass || node.type, cur);
+      if (!entry) return null;
+
+      const widgets = spec.points.map((p) => p.widget);
+      const read = (n) => readVal(node, n, 0);
+      const eff = effectiveValues(read, entry, widgets);
+      const manual = {};
+      for (const w of widgets) manual[w] = read(w);
+      if (!differs(manual, eff)) return null;
+      return widgets.map((w) => clamp(eff[w], -R, R));
     },
 
     draw(ctx, node, widgetWidth, y, _h) {
@@ -211,6 +240,40 @@ export function createCurveController(node, spec) {
         const xs = spec.points.map((p) => p.x);
         const toY = (v) => midY - (v / R) * (PLOT_H / 2);
         const slopes = monotoneSlopes(xs, vals);
+
+        // --- ghost: the curve as it will be APPLIED, manual + preset ---
+        // Drawn UNDER the solid one, dashed, so the solid curve stays the thing
+        // you drag and the ghost stays the thing that ships.
+        const ghost = this.ghostValues(node);
+        if (ghost) {
+          const gslopes = monotoneSlopes(xs, ghost);
+          ctx.save();
+          ctx.setLineDash(GHOST_DASH);
+          ctx.beginPath();
+          for (let px = 0; px <= tw; px += 2) {
+            const t = px / tw;
+            const py = toY(evalMonotone(t, xs, ghost, gslopes));
+            if (px === 0) ctx.moveTo(tx0 + px, py);
+            else ctx.lineTo(tx0 + px, py);
+          }
+          ctx.strokeStyle = GHOST_STROKE;
+          ctx.lineWidth = 1.4;
+          ctx.stroke();
+          // No fill under the ghost: the solid curve's own fill is only 0.13
+          // alpha, so an amber wash beneath it turns the blue olive and the two
+          // curves stop reading as two curves. The dashed line and the hollow
+          // handles carry it on their own.
+          ctx.setLineDash([]);
+          for (let i = 0; i < spec.points.length; i++) {
+            ctx.beginPath();
+            ctx.arc(tx0 + spec.points[i].x * tw, toY(ghost[i]), HANDLE_R - 1,
+                    0, Math.PI * 2);
+            ctx.strokeStyle = GHOST_STROKE;
+            ctx.lineWidth = 1.2;
+            ctx.stroke();
+          }
+          ctx.restore();
+        }
 
         const STEP = 2;
         ctx.beginPath();
@@ -279,15 +342,17 @@ export function createCurveController(node, spec) {
           }
         }
 
-        // --- preset honesty caption ---
+        // --- preset caption: a legend when the ghost is up, the old honesty
+        // line when it is not (preset route unreachable, or still loading) ---
         if (spec.preset) {
           const pw = findWidget(node, spec.preset.widget);
           const cur = pw ? String(pw.value) : spec.preset.custom;
           if (cur && cur !== spec.preset.custom) {
             ctx.textAlign = "left";
             ctx.fillStyle = "#c9a227";
-            ctx.fillText(spec.preset.caption, x0,
-                         y + curveHeight(spec) - BOTTOM_PAD - CAPTION_H / 2);
+            ctx.fillText(ghost ? "dashed = with preset applied"
+                               : spec.preset.caption,
+                         x0, y + curveHeight(spec) - BOTTOM_PAD - CAPTION_H / 2);
           }
         }
 

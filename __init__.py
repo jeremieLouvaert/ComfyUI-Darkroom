@@ -1,5 +1,6 @@
 from .nodes import NODE_CLASS_MAPPINGS, NODE_DISPLAY_NAME_MAPPINGS
 from . import server_routes  # registers /darkroom/list_dir and /darkroom/mkdir
+from . import grading_preset_routes  # registers /darkroom/grading_presets
 
 WEB_DIRECTORY = "./web"
 
