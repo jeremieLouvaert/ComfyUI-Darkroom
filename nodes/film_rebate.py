@@ -44,6 +44,7 @@ import math
 import os
 
 import numpy as np
+import torch
 from PIL import Image, ImageDraw, ImageFont
 
 from ..utils.image import tensor_to_numpy_batch, numpy_batch_to_tensor
@@ -58,7 +59,7 @@ def mask_batch_to_tensor(arrays):
     """list of (H,W) float32 numpy arrays -> ComfyUI MASK tensor (B,H,W).
     Mirrors ComfyUI-Schematic/nodes/schematic_overlay.py's helper."""
     stacked = np.stack([np.ascontiguousarray(a, dtype=np.float32) for a in arrays], axis=0)
-    return __import__("torch").from_numpy(stacked)
+    return torch.from_numpy(stacked)
 
 
 # ---------------------------------------------------------------------------

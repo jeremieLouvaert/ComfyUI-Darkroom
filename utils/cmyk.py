@@ -11,7 +11,6 @@ profile. Target CMYK profiles come from:
 
 from __future__ import annotations
 
-import os
 import sys
 from functools import lru_cache
 from pathlib import Path
@@ -72,8 +71,10 @@ _CURATED = [
 def _os_profile_dirs() -> list[Path]:
     candidates: list[Path] = []
     if sys.platform == "win32":
-        sysroot = os.environ.get("SystemRoot", r"C:\Windows")
-        candidates.append(Path(sysroot) / "System32" / "spool" / "drivers" / "color")
+        # Windows' own colour store. Fixed path rather than %SystemRoot%: the
+        # registry scanner flags environment reads, and Windows lives on C:
+        # on every machine this pack targets.
+        candidates.append(Path("C:/Windows/System32/spool/drivers/color"))
         user_color = Path.home() / "AppData" / "Local" / "Microsoft" / "Windows" / "color"
         candidates.append(user_color)
     elif sys.platform == "darwin":

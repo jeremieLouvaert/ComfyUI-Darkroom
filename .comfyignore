@@ -1,0 +1,5 @@
+# Dev-only files kept in git but left out of the Comfy Registry package.
+tools/
+docs/
+third_party/
+.github/
