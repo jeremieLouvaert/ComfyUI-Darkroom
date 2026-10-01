@@ -10,6 +10,7 @@ Pure Python + numpy. No DNG SDK, no OCIO, no OpenImageIO.
 """
 
 import os
+import re
 import struct
 from dataclasses import dataclass
 from typing import Optional, Tuple
@@ -553,9 +554,14 @@ _look_names_cache: list = None
 
 
 def _body_folder(make, model):
-    """Folder name Adobe uses for a body in Camera/: '<Make> <Model>' trimmed."""
+    """Folder name Adobe uses for a body in Camera/: '<Make> <Model>' trimmed.
+
+    make/model come from the RAW file's EXIF, so they are untrusted: path
+    separators, colons and '..' are stripped so a crafted file cannot steer the
+    profile lookup outside its root."""
     parts = [p for p in [(make or "").strip(), (model or "").strip()] if p]
-    return " ".join(parts)
+    name = re.sub(r'[\\/:\x00]', " ", " ".join(parts)).replace("..", " ")
+    return " ".join(name.split())
 
 
 # Longest-prefix-first so multi-word brands ("OM Digital Solutions", "Phase One")

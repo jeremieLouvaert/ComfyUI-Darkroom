@@ -9,6 +9,7 @@ import os
 import torch
 
 from ..utils.dcp import list_brands_with_looks, list_all_look_variants
+from ..utils.paths import resolve_allowed, PathNotAllowed
 from ..utils.raw_loader import (
     decode_raw_linear,
     apply_post_processing,
@@ -40,8 +41,10 @@ class DarkroomRAWLoad:
             "required": {
                 "raw_file": ("STRING", {
                     "default": "",
-                    "tooltip": "Absolute path to a camera RAW file "
-                               "(.raf .cr3 .nef .arw .dng ...). Use the Browse button to pick one."
+                    "tooltip": "Path to a camera RAW file (.raf .cr3 .nef .arw .dng ...). "
+                               "Use the Browse button to pick one. Must be inside ComfyUI's "
+                               "input/output/temp/models folders or a folder listed in "
+                               "darkroom_allowed_folders.json. Relative paths start in input/."
                 }),
                 "demosaic": (DEMOSAIC_OPTIONS, {
                     "default": DEMOSAIC_OPTIONS[0],
@@ -119,9 +122,13 @@ class DarkroomRAWLoad:
     def execute(self, raw_file, demosaic, output_colorspace,
                 white_balance, highlight_mode, half_size, output_mode,
                 baseline_exposure=0.0, camera_look="", camera_brand="Adobe Standard"):
-        raw_file = (raw_file or "").strip().replace("\\", "/")
+        raw_file = (raw_file or "").strip()
         if not raw_file:
             raise ValueError("[Darkroom RAW Load] no file path provided")
+        try:
+            raw_file = resolve_allowed(raw_file, "read").replace("\\", "/")
+        except PathNotAllowed as e:
+            raise ValueError(f"[Darkroom RAW Load] {e}") from None
         if not os.path.isfile(raw_file):
             raise FileNotFoundError(f"[Darkroom RAW Load] file not found: {raw_file}")
 

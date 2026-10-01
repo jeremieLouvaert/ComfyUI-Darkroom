@@ -9,6 +9,7 @@ import os
 import numpy as np
 
 from ..utils.lut import image_to_lut_3d, write_cube_file
+from ..utils.paths import resolve_allowed, resolve_output_file, safe_filename, PathNotAllowed
 
 
 class LUTExport:
@@ -34,7 +35,9 @@ class LUTExport:
                 }),
                 "output_directory": ("STRING", {
                     "default": "",
-                    "tooltip": "Output directory. Leave empty for ComfyUI output/luts/"
+                    "tooltip": "Output directory. Leave empty for ComfyUI output/luts/. Must be "
+                               "inside ComfyUI's output folder or a folder listed in "
+                               "darkroom_allowed_folders.json. Relative paths start in output/."
                 }),
             }
         }
@@ -50,19 +53,21 @@ class LUTExport:
 
         size = int(lut_size)
 
-        # Determine output directory
-        if not output_directory or output_directory.strip() == "":
-            # Default to ComfyUI output/luts/
-            import folder_paths
-            output_dir = os.path.join(folder_paths.get_output_directory(), "luts")
-        else:
-            output_dir = output_directory.strip()
+        # Output directory: blank = ComfyUI output/luts/, anything else must
+        # resolve inside a write root (relative paths start in output/).
+        try:
+            output_dir = resolve_allowed((output_directory or "").strip() or "luts", "write")
+        except PathNotAllowed as e:
+            raise ValueError(f"[Darkroom] LUT Export: {e}") from None
 
-        # Clean filename
-        safe_name = filename.strip().replace(" ", "_")
-        if not safe_name:
-            safe_name = "darkroom_grade"
-        filepath = os.path.join(output_dir, f"{safe_name}.cube")
+        # A bare file name only: no directories, drive or stream colons.
+        safe_name = safe_filename(filename.replace(" ", "_"), "darkroom_grade")
+        if safe_name.lower().endswith(".cube"):
+            safe_name = safe_name[:-5] or "darkroom_grade"
+        try:
+            filepath = resolve_output_file(output_dir, f"{safe_name}.cube")
+        except PathNotAllowed as e:
+            raise ValueError(f"[Darkroom] LUT Export: {e}") from None
 
         # Convert tensor to numpy
         img = processed_lattice[0].cpu().numpy().astype(np.float32)

@@ -14,22 +14,12 @@ import numpy as np
 
 from ..utils.image import tensor_to_numpy_batch
 from ..utils.cmyk import discover_profiles, export_cmyk_tiff, INTENT_NAMES
+from ..utils.paths import resolve_allowed, resolve_output_file, safe_filename, PathNotAllowed
 
 
 _PROFILES = discover_profiles()
 _LABELS = [lbl for lbl, _, _ in _PROFILES]
 _LABEL_TO_PATH = {lbl: str(p) for lbl, p, _ in _PROFILES}
-
-
-def _default_output_dir() -> str:
-    """
-    Default to ComfyUI's output/ if we can find it, else current cwd/output.
-    """
-    try:
-        import folder_paths  # ComfyUI runtime module
-        return os.path.join(folder_paths.get_output_directory(), "cmyk")
-    except Exception:
-        return os.path.join(os.getcwd(), "output", "cmyk")
 
 
 class CMYKExportTIFF:
@@ -53,7 +43,9 @@ class CMYKExportTIFF:
                 }),
                 "output_dir": ("STRING", {
                     "default": "",
-                    "tooltip": "Directory to save to. Blank = ComfyUI output/cmyk/"
+                    "tooltip": "Directory to save to. Blank = ComfyUI output/cmyk/. Must be "
+                               "inside ComfyUI's output folder or a folder listed in "
+                               "darkroom_allowed_folders.json. Relative paths start in output/."
                 }),
                 "dpi": ("INT", {
                     "default": 300, "min": 72, "max": 1200, "step": 12,
@@ -75,8 +67,14 @@ class CMYKExportTIFF:
                 "Ensure system ICC profiles exist, or drop a .icc into data/icc_profiles/"
             )
 
-        out_dir = output_dir.strip() or _default_output_dir()
+        # Blank = ComfyUI output/cmyk/; anything else must resolve inside a
+        # write root (relative paths start in output/).
+        try:
+            out_dir = resolve_allowed((output_dir or "").strip() or "cmyk", "write")
+        except PathNotAllowed as e:
+            raise ValueError(f"[Darkroom] CMYK Export: {e}") from None
         os.makedirs(out_dir, exist_ok=True)
+        prefix = safe_filename(filename_prefix, "darkroom_cmyk")
 
         path = _LABEL_TO_PATH[target_profile]
         arrs = tensor_to_numpy_batch(image)
@@ -85,8 +83,11 @@ class CMYKExportTIFF:
         saved_paths: list[str] = []
         for idx, arr in enumerate(arrs):
             suffix = f"_{idx:02d}" if len(arrs) > 1 else ""
-            out_name = f"{filename_prefix}_{ts}{suffix}.tif"
-            out_path = os.path.join(out_dir, out_name)
+            out_name = f"{prefix}_{ts}{suffix}.tif"
+            try:
+                out_path = resolve_output_file(out_dir, out_name)
+            except PathNotAllowed as e:
+                raise ValueError(f"[Darkroom] CMYK Export: {e}") from None
             saved = export_cmyk_tiff(
                 np.clip(arr, 0.0, 1.0),
                 target_path=path,

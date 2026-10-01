@@ -73,7 +73,7 @@ The most complete color toolset in the ComfyUI ecosystem: physics-based film emu
 
 | Node | Description |
 |------|-------------|
-| **RAW Load** | Decodes camera RAW files (.cr3, .nef, .arw, .raf, .dng, .rw2, .orf, .pef, .x3f, .iiq, and more) via rawpy/LibRaw. Exposes demosaic algorithm, white balance, highlight mode, output colorspace, linear-scene vs sRGB-display output, and a **Camera Look** profile selector (see below). Outputs an IMAGE and a `RAW_METADATA` sidecar. |
+| **RAW Load** | Decodes camera RAW files (.cr3, .nef, .arw, .raf, .dng, .rw2, .orf, .pef, .x3f, .iiq, and more) via rawpy/LibRaw. Exposes demosaic algorithm, white balance, highlight mode, output colorspace, linear-scene vs sRGB-display output, and a **Camera Look** profile selector (see below). Outputs an IMAGE and a `RAW_METADATA` sidecar. The file must sit in an [allowed folder](#allowed-folders-security). |
 | **RAW Metadata Split** | Splits `RAW_METADATA` into 15 typed primitives: camera make/model, lens make/model, ISO, aperture, shutter, focal length, datetime, sensor type, resolution, Fuji film sim, and more. Wire any primitive directly into a text node or downstream tool. |
 
 #### Camera Look profiles: `ComfyUI/models/camera_profiles/`
@@ -142,7 +142,7 @@ The baker is vendored at `third_party/spectral_film_lut/` (MIT, JanLohse/spectra
 | **CMYK Soft-Proof** | RGB → target CMYK → RGB roundtrip preview. Image stays in RGB for continued editing, the colour shift you see is what will happen on press. |
 | **CMYK Gamut Warning** | Overlays pixels that cannot be accurately reproduced by the chosen print condition (threshold configurable). Logs out-of-gamut percentage. |
 | **CMYK TAC Check** | Converts to CMYK and flags pixels where C+M+Y+K exceeds the TAC (Total Area Coverage) limit. Presets: 330% coated / 300% uncoated / 300% web coated / 240% newsprint / custom. Prevents ink-drying and show-through problems before the file ships. |
-| **CMYK Export TIFF** | Writes a 4-channel CMYK TIFF with ICC profile embedded. LZW-compressed, configurable DPI, defaults to `ComfyUI/output/cmyk/`. This is the file you send to the printer. |
+| **CMYK Export TIFF** | Writes a 4-channel CMYK TIFF with ICC profile embedded. LZW-compressed, configurable DPI, defaults to `ComfyUI/output/cmyk/`. Custom output folders must be [allowed](#allowed-folders-security). This is the file you send to the printer. |
 
 **ICC profile discovery:** The CMYK nodes auto-discover profiles from (1) `ComfyUI-Darkroom/data/icc_profiles/` for user drops, and (2) the OS colour-profile store. On Windows you already have FOGRA39 (ISO Coated v2), FOGRA27, FOGRA29 (uncoated), GRACoL 2006, US Web Coated SWOP v2, SWOP 2006 Grade 3/5, Euroscale Coated/Uncoated, SNAP 2007 newsprint, JapanColor 2001/2002, all bundled by Windows at `C:\Windows\System32\spool\drivers\color\`. Additional free profiles are available from [ECI](https://www.eci.org/doku.php?id=en:downloads) (FOGRA51 / PSO Coated v3 / PSO Uncoated v3 / ISO Newspaper 26v4).
 
@@ -161,8 +161,8 @@ The baker is vendored at `third_party/spectral_film_lut/` (MIT, JanLohse/spectra
 | **LUT Identity Generator** | Outputs a neutral identity lattice image. Feed into LUT Bake Inject to grade your photo and bake a .cube at the same time. Sizes: 17, 33, 65. |
 | **LUT Bake Inject** | Pairs your photo with the identity lattice as a 2-image batch. The grading chain then processes both with identical settings, no node duplication. |
 | **LUT Bake Extract** | Splits the batch back out after the grading chain: graded photo to preview, graded lattice to LUT Export. |
-| **LUT Export (.cube)** | Bakes any Darkroom processing chain into a standard .cube 3D LUT file. Works in DaVinci Resolve, Premiere Pro, Photoshop, Capture One, FCPX, or any tool that supports 3D LUTs. |
-| **LUT Apply (.cube)** | Loads and applies any .cube 3D LUT with trilinear interpolation. Import looks from DaVinci Resolve, download creative LUTs, or reuse exported Darkroom grades. Strength slider for blending. |
+| **LUT Export (.cube)** | Bakes any Darkroom processing chain into a standard .cube 3D LUT file. Works in DaVinci Resolve, Premiere Pro, Photoshop, Capture One, FCPX, or any tool that supports 3D LUTs. Writes to `ComfyUI/output/luts/` by default; custom folders must be [allowed](#allowed-folders-security). |
+| **LUT Apply (.cube)** | Loads and applies any .cube 3D LUT with trilinear interpolation. Import looks from DaVinci Resolve, download creative LUTs, or reuse exported Darkroom grades. Strength slider for blending. The .cube must sit in an [allowed folder](#allowed-folders-security). |
 | **Color Space Transform** | Convert between sRGB, Linear sRGB, ACEScg, ACEScct, Rec.2020, and DCI-P3. The only ACES-aware color management in ComfyUI. Soft gamut compression option. |
 | **ACES Tonemap** | Industry-standard tonemapping: ACES Filmic, ACES Fitted (Hill), AgX (Blender), Reinhard, Filmic (Uncharted 2). Exposure bias, ACES gamut conversion, white point control. |
 
@@ -201,6 +201,28 @@ If you want spatial effects on your final image, apply them to `graded_photo` **
 ### Example workflow
 
 A ready-to-use example is in [`workflows/lut_bake_and_apply.json`](workflows/lut_bake_and_apply.json). Drag it into ComfyUI, load a photo, and press Queue Prompt, and you'll get a graded preview and a `.cube` file in `output/luts/`.
+
+## Allowed folders (security)
+
+Since 1.27.0, every file path Darkroom takes from a workflow or from the Browse dialog is confined to a set of allowed folders. ComfyUI's HTTP API has no login, so without this anyone who can reach your ComfyUI could read or write files anywhere on the machine through these nodes.
+
+| | Allowed by default |
+|---|---|
+| **Read** (RAW Load, LUT Apply, Browse dialog) | ComfyUI `input/`, `output/`, `temp/`, `models/` |
+| **Write** (LUT Export, CMYK Export TIFF, New folder) | ComfyUI `output/` |
+
+Relative paths start in `input/` for reading and `output/` for writing, so `luts/my_grade` in LUT Export means `output/luts/my_grade.cube`. File names are reduced to a bare name, so `../` cannot leave the output folder.
+
+**To use another folder** (for example your RAW archive on another drive), create `darkroom_allowed_folders.json` in the ComfyUI folder (next to `main.py`) with a list of absolute paths:
+
+```json
+[
+  "D:/Photos/RAW",
+  "E:/Grading/LUTs"
+]
+```
+
+Listed folders are allowed for both reading and writing, take effect without a restart, and appear under Quick access in the Browse dialog. The file lives in the ComfyUI folder on purpose: nothing reachable over HTTP can write there, so only someone with access to the machine can widen the list. Pinned folders outside the allowed set are hidden, and come back if you allow their folder later.
 
 ## Installation
 

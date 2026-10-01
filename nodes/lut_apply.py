@@ -10,6 +10,7 @@ import numpy as np
 from ..utils.color import blend
 from ..utils.image import tensor_to_numpy_batch, numpy_batch_to_tensor
 from ..utils.lut import parse_cube_file, apply_lut_trilinear
+from ..utils.paths import resolve_allowed, PathNotAllowed
 
 
 class LUTApply:
@@ -24,8 +25,9 @@ class LUTApply:
                 "image": ("IMAGE",),
                 "lut_file": ("STRING", {
                     "default": "",
-                    "tooltip": "Path to a .cube LUT file. Can come from LUT Export output "
-                               "or any external .cube file"
+                    "tooltip": "Path to a .cube LUT file, e.g. a LUT Export output. Must be "
+                               "inside ComfyUI's input/output/temp/models folders or a folder "
+                               "listed in darkroom_allowed_folders.json. Relative paths start in input/."
                 }),
             },
             "optional": {
@@ -63,6 +65,10 @@ class LUTApply:
             print("[Darkroom] LUT Apply: no file specified, passing through")
             return (image,)
 
+        try:
+            filepath = resolve_allowed(filepath, "read")
+        except PathNotAllowed as e:
+            raise ValueError(f"[Darkroom] LUT Apply: {e}") from None
         if not os.path.isfile(filepath):
             raise FileNotFoundError(
                 f"[Darkroom] LUT Apply: file not found — {filepath}"

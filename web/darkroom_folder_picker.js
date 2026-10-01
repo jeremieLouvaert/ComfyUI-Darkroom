@@ -159,9 +159,10 @@ function injectStyles() {
     document.head.appendChild(style);
 }
 
-async function fetchList(path, extensions) {
+async function fetchList(path, extensions, scope) {
     const params = new URLSearchParams();
     if (path) params.set("path", path);
+    params.set("scope", scope === "write" ? "write" : "read");
     if (extensions && extensions.length) params.set("extensions", extensions.join(","));
     const resp = await fetch(`/darkroom/list_dir?${params.toString()}`);
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
@@ -216,6 +217,8 @@ async function removePin(path) {
  *   mode:         "folder" (default) | "file"
  *   initialPath:  starting path (file paths resolve to their parent)
  *   extensions:   array of extensions in file mode, e.g. [".cube"]
+ *   scope:        "read" (default) | "write". The server only lists folders
+ *                 inside the allowed roots for that scope (see utils/paths.py).
  *   title:        header text
  *   selectLabel:  confirm button label
  */
@@ -224,6 +227,7 @@ function openPathPicker(options, onSelect) {
         mode = "folder",
         initialPath = "",
         extensions = null,
+        scope = "read",
         title = "Choose folder",
         selectLabel = "Select",
     } = options || {};
@@ -453,9 +457,12 @@ function openPathPicker(options, onSelect) {
     async function navigate(path) {
         clearError();
         try {
-            const data = await fetchList(path, extensions);
+            const data = await fetchList(path, extensions, scope);
             state.viewPath = data.path || "";
             state.viewParent = data.parent || "";
+            $("[data-act=up]").disabled = !state.viewParent;
+            // New folder only where the server says Darkroom may write.
+            $("[data-slot=newfolder]").style.display = (isFileMode || !data.writable) ? "none" : "";
             // In folder mode, default the selection to the current view. In file
             // mode, the user must actively pick a file — don't preselect.
             state.selectedPath = isFileMode ? "" : (data.path || "");
@@ -558,6 +565,7 @@ app.registerExtension({
                 const r = orig?.apply(this, arguments);
                 attachBrowseButton(this, "output_directory", "Browse for folder...", {
                     mode: "folder",
+                    scope: "write",
                     title: "Choose output folder",
                     selectLabel: "Select this folder",
                 });
