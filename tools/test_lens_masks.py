@@ -870,7 +870,8 @@ def i7_nc_per_channel_masks():
     Dx_b = dx * scale_b - dx
 
     mask_r = hard_half_mask(h, w)
-    mask_b = torch.zeros(h, w); mask_b[:h // 2, :] = 1.0  # a DIFFERENT region
+    mask_b = torch.zeros(h, w)
+    mask_b[:h // 2, :] = 1.0  # a DIFFERENT region
 
     Dxr_m = mask_r * Dx_r
     true_ratio = sr / sb
