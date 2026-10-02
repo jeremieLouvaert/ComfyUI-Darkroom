@@ -79,6 +79,10 @@ def _poisson_invcdf(mean, u, qmax):
 
 def _render_channel(u, mu_r, sigma_r, n_samples, filter_sigma, seed, device):
     """
+    REFERENCE implementation (pixel-wise). Production uses
+    _render_channel_grainwise, which is bitwise identical and ~100-300x faster on
+    large images (tools/test_grain_grainwise.py keeps the two equal).
+
     Render the filtered Boolean model for one (H, W) field u in [0, 1].
     Returns v (H, W): the tone-preserving grainy render (E[v] = ũ).
 
@@ -165,6 +169,92 @@ def _render_channel(u, mu_r, sigma_r, n_samples, filter_sigma, seed, device):
     return v / float(n_samples)
 
 
+def _render_channel_grainwise(u, mu_r, sigma_r, n_samples, filter_sigma, seed, device,
+                              max_pairs=24_000_000):
+    """
+    Same output as _render_channel, BITWISE (docs/film-grain-pro-grainwise.md):
+    the identical (pixel, cell, slot) hit tests, but enumerated from the grains
+    that exist instead of from every cell, so empty cells cost nothing.
+    """
+    H, W = u.shape
+    u = u.to(device=device, dtype=torch.float32)
+    seed_i = int(seed) & 0x7FFFFFFF
+
+    # --- setup: identical to _render_channel ---
+    u_tilde = (u / (1.0 + EPS)).clamp(0.0, 1.0 - 1e-6)
+    inv_area = 1.0 / (math.pi * (mu_r * mu_r + sigma_r * sigma_r))
+    lam = inv_area * torch.log(1.0 / (1.0 - u_tilde))
+    if sigma_r <= 0.0:
+        rm = mu_r
+        s_log = 0.0
+        m_log = math.log(mu_r)
+    else:
+        s_log = math.sqrt(math.log(1.0 + (sigma_r * sigma_r) / (mu_r * mu_r)))
+        m_log = math.log(mu_r * mu_r / math.sqrt(mu_r * mu_r + sigma_r * sigma_r))
+        rm = min(math.exp(m_log + s_log * _Z999), 5.0 * mu_r)
+    rm2 = rm * rm
+    cell_rad = max(1, math.ceil(rm))
+    m_max = float(lam.max().item())
+    qmax = int(min(24, max(2, math.ceil(m_max + 4.0 * math.sqrt(m_max) + 2.0))))
+    g_idx = torch.arange(qmax, device=device, dtype=torch.int64).view(1, 1, qmax)
+    cols = torch.arange(W, device=device, dtype=torch.int64).view(1, W).expand(H, W)
+    rows = torch.arange(H, device=device, dtype=torch.int64).view(H, 1).expand(H, W)
+    u_cnt = _hash_uniform(cols, rows, 0, seed_i)
+    q_grid = _poisson_invcdf(lam, u_cnt, qmax)
+    cxe, cye = cols.unsqueeze(-1), rows.unsqueeze(-1)
+    ux_grid = _hash_uniform(cxe, cye, 1 + 4 * g_idx, seed_i)
+    uy_grid = _hash_uniform(cxe, cye, 2 + 4 * g_idx, seed_i)
+    if sigma_r > 0.0:
+        ur = _hash_uniform(cxe, cye, 3 + 4 * g_idx, seed_i)
+        r_grid = torch.exp(m_log + s_log * _norm_invcdf(ur)).clamp(max=rm)
+        r2_grid = r_grid * r_grid
+    gen = torch.Generator(device=device)
+    gen.manual_seed(seed_i)
+    xi = (torch.randn(n_samples, 2, generator=gen, device=device) * filter_sigma).cpu().tolist()
+
+    # --- the grains that exist: (cy, cx, k) with k < q[cy, cx] ---
+    cy, cx, k = (g_idx < q_grid.unsqueeze(-1)).nonzero(as_tuple=True)
+    ux = ux_grid[cy, cx, k]
+    uy = uy_grid[cy, cx, k]
+    r2 = r2_grid[cy, cx, k] if sigma_r > 0.0 else None
+    del ux_grid, uy_grid, q_grid, lam, u_cnt
+    G = cy.numel()
+
+    offs = torch.arange(-cell_rad, cell_rad + 1, device=device, dtype=torch.int64)
+    dcy_all = offs.view(-1, 1).expand(-1, offs.numel()).reshape(-1)     # (P,) all (dcy, dcx)
+    dcx_all = offs.view(1, -1).expand(offs.numel(), -1).reshape(-1)
+    P = dcy_all.numel()
+    chunk = max(1, max_pairs // max(P, 1))                              # grains per chunk
+
+    v = torch.zeros(H * W, device=device, dtype=torch.float32)
+    covered = torch.zeros(H * W, device=device, dtype=torch.bool)
+    for xix, xiy in xi:
+        sx = math.floor(_HALF + xix)
+        sy = math.floor(_HALF + xiy)
+        fracx = _HALF + xix - sx
+        fracy = _HALF + xiy - sy
+        # (fracx - dcx) in double, rounded to float32: the same value the
+        # pixel-wise code feeds into "(fracx - dcx) - uxr"
+        ax = torch.tensor([fracx - d for d in dcx_all.tolist()], device=device, dtype=torch.float32)
+        ay = torch.tensor([fracy - d for d in dcy_all.tolist()], device=device, dtype=torch.float32)
+        covered.zero_()
+        for g0 in range(0, G, chunk):
+            g1 = min(G, g0 + chunk)
+            dx = ax.view(-1, 1) - ux[g0:g1].view(1, -1)                   # (P, g)
+            dy = ay.view(-1, 1) - uy[g0:g1].view(1, -1)
+            dist2 = dx * dx + dy * dy
+            hit = dist2 < (rm2 if r2 is None else r2[g0:g1].view(1, -1))
+            pp, gg = hit.nonzero(as_tuple=True)
+            if pp.numel() == 0:
+                continue
+            j = (cx[g0:g1][gg] - sx - dcx_all[pp]) % W
+            i = (cy[g0:g1][gg] - sy - dcy_all[pp]) % H
+            covered[i * W + j] = True
+        v += covered.to(torch.float32)
+
+    return (v / float(n_samples)).view(H, W)
+
+
 def _norm_invcdf(u):
     """Standard-normal inverse CDF (Acklam-style rational approx), torch (H,W)."""
     # coefficients
@@ -239,7 +329,7 @@ def render_film_grain(img, grain_size, radius_variation, strength,
     if color_grain <= 0.01 or C < 3:
         luma = 0.2126 * img[..., 0] + 0.7152 * img[..., 1] + 0.0722 * img[..., 2] \
             if C >= 3 else img[..., 0]
-        v = _render_channel(luma, mu_r, sigma_r, n_samples, filter_sigma, seed, device)
+        v = _render_channel_grainwise(luma, mu_r, sigma_r, n_samples, filter_sigma, seed, device)
         dev = (v - luma).unsqueeze(-1)             # (H, W, 1) zero-mean grain
         out = img + strength * dev
         return out.clamp(0.0, 1.0)
@@ -248,7 +338,7 @@ def render_film_grain(img, grain_size, radius_variation, strength,
     devs = []
     for c in range(3):
         u_c = img[..., c]
-        v_c = _render_channel(u_c, mu_r, sigma_r, n_samples, filter_sigma,
+        v_c = _render_channel_grainwise(u_c, mu_r, sigma_r, n_samples, filter_sigma,
                               int(seed) + c * 101, device)
         devs.append(v_c - u_c)
     dev_shared = devs[1]                            # green channel grain
