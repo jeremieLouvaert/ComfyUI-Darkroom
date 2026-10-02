@@ -8,3 +8,4 @@ output/
 dist/
 build/
 test_data/
+tools/golden/
