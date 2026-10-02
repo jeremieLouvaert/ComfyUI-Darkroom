@@ -3,12 +3,10 @@ Hue vs Sat node for ComfyUI-Darkroom.
 Adjust saturation per hue range with presets and per-band manual control.
 """
 
-import numpy as np
-
-from ..utils.color import srgb_to_linear, linear_to_srgb, luminance_rec709, blend
-from ..utils.image import tensor_to_numpy_batch, numpy_batch_to_tensor
-from ..utils.raw import rgb_to_hsl, hsl_to_rgb
-from ..utils.grading import hue_range_mask
+from ..utils.gpu_color import (
+    srgb_to_linear, linear_to_srgb, blend, rgb_to_hsl, hsl_to_rgb,
+    hue_range_mask, run_on_device,
+)
 from ..data.grading_presets import HUE_VS_SAT_PRESETS, HUE_VS_SAT_PRESET_NAMES
 
 
@@ -125,11 +123,7 @@ class HueVsSat:
 
         print(f"[Darkroom] Hue vs Sat: preset={preset}, {len(active)} active bands, strength={strength}")
 
-        images = tensor_to_numpy_batch(image)
-        results = []
-
-        for img in images:
-            original = img.copy()
+        def grade(img):
             linear = srgb_to_linear(img)
             h, s, l = rgb_to_hsl(linear)
 
@@ -138,13 +132,13 @@ class HueVsSat:
                 mask = hue_range_mask(h, center, width=45.0, softness=feather)
                 # Multiplicative saturation adjustment
                 s = s * (1.0 + mask * (adj_value / 100.0))
-                s = np.clip(s, 0.0, 1.0)
+                s = s.clamp(0.0, 1.0)
 
             result = hsl_to_rgb(h, s, l)
             result = linear_to_srgb(result)
-            results.append(blend(original, result, strength))
+            return blend(img, result, strength)
 
-        return (numpy_batch_to_tensor(results),)
+        return (run_on_device(grade, image),)
 
 
 NODE_CLASS_MAPPINGS = {"DarkroomHueVsSat": HueVsSat}

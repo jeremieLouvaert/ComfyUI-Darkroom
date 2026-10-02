@@ -8,15 +8,13 @@ already have similar hues. Instead, we PULL each skin pixel toward the
 AREA-WEIGHTED MEAN skin color. This evens out redness, sallowness, and
 uneven tan while preserving luminance detail completely.
 
-GPU-accelerated via torch. No CPU roundtrip.
+Runs on ComfyUI's device via utils/gpu_color (one upload, one download).
 """
 
 import torch
 
-from ..utils.torch_ops import (
-    rgb_to_hsl, hsl_to_rgb, skin_mask as _skin_mask_torch,
-    gaussian_blur_2d, blend,
-)
+from ..utils.gpu_color import rgb_to_hsl, hsl_to_rgb, blend, run_on_device
+from ..utils.torch_ops import skin_mask as _skin_mask_torch, gaussian_blur_2d
 
 
 # Preset definitions: (hue_center, hue_width, sat_min, sat_max, lum_min, lum_max)
@@ -107,76 +105,73 @@ class SkinToneUniformity:
         if strength <= 0.0 or amount < 0.5:
             return (image, image)
 
-        device = image.device
-        batch_size = image.shape[0]
-        results = []
-        masks = []
+        def even_out(batch):
+            outs = []
+            for i in range(batch.shape[0]):
+                img = batch[i]  # (H, W, C); the blurs are 2D, so one image at a time
+                h_img, w_img = img.shape[0], img.shape[1]
 
-        for i in range(batch_size):
-            img = image[i]  # (H, W, C) stays on device
-            original = img.clone()
-            h_img, w_img = img.shape[0], img.shape[1]
+                h, s, l = rgb_to_hsl(img)
 
-            h, s, l = rgb_to_hsl(img)
+                # Build soft skin mask
+                mask = _skin_mask_torch(h, s, l, hue_center, hue_width,
+                                        saturation_min, saturation_max,
+                                        luminance_min, luminance_max)
 
-            # Build soft skin mask
-            mask = _skin_mask_torch(h, s, l, hue_center, hue_width,
-                                    saturation_min, saturation_max,
-                                    luminance_min, luminance_max)
+                # Smooth mask edges
+                mask_sigma = max(h_img, w_img) * 0.015
+                mask_smooth = gaussian_blur_2d(mask, sigma=mask_sigma).clamp(0.0, 1.0)
 
-            # Smooth mask edges
-            mask_sigma = max(h_img, w_img) * 0.015
-            mask_smooth = gaussian_blur_2d(mask, sigma=mask_sigma).clamp(0.0, 1.0)
+                # --- STRATEGY: Pull toward weighted-average skin color ---
+                ref_size = 1024.0
+                scale = max(h_img, w_img) / ref_size
+                target_sigma = (smoothing_radius / 100.0) * 40.0 * scale
 
-            # --- STRATEGY: Pull toward weighted-average skin color ---
-            ref_size = 1024.0
-            scale = max(h_img, w_img) / ref_size
-            target_sigma = (smoothing_radius / 100.0) * 40.0 * scale
+                # Hue averaging in circular space (handles wraparound)
+                h_rad = h * (3.141592653589793 / 180.0)
+                h_sin = torch.sin(h_rad)
+                h_cos = torch.cos(h_rad)
 
-            # Hue averaging in circular space (handles wraparound)
-            h_rad = h * (3.141592653589793 / 180.0)
-            h_sin = torch.sin(h_rad)
-            h_cos = torch.cos(h_rad)
+                # Weight by mask so non-skin doesn't pollute the average
+                weighted_sin = h_sin * mask_smooth
+                weighted_cos = h_cos * mask_smooth
 
-            # Weight by mask so non-skin doesn't pollute the average
-            weighted_sin = h_sin * mask_smooth
-            weighted_cos = h_cos * mask_smooth
+                # Large blur to compute local weighted average
+                avg_sin = gaussian_blur_2d(weighted_sin, sigma=target_sigma)
+                avg_cos = gaussian_blur_2d(weighted_cos, sigma=target_sigma)
+                avg_weight = gaussian_blur_2d(mask_smooth, sigma=target_sigma) + 1e-10
 
-            # Large blur to compute local weighted average
-            avg_sin = gaussian_blur_2d(weighted_sin, sigma=target_sigma)
-            avg_cos = gaussian_blur_2d(weighted_cos, sigma=target_sigma)
-            avg_weight = gaussian_blur_2d(mask_smooth, sigma=target_sigma) + 1e-10
+                # Normalized weighted average hue
+                target_h = (torch.atan2(avg_sin / avg_weight, avg_cos / avg_weight)
+                            * (180.0 / 3.141592653589793)) % 360.0
 
-            # Normalized weighted average hue
-            target_h = (torch.atan2(avg_sin / avg_weight, avg_cos / avg_weight)
-                        * (180.0 / 3.141592653589793)) % 360.0
+                # Weighted average saturation
+                weighted_s = s * mask_smooth
+                avg_s = gaussian_blur_2d(weighted_s, sigma=target_sigma)
+                target_s = (avg_s / avg_weight).clamp(0.0, 1.0)
 
-            # Weighted average saturation
-            weighted_s = s * mask_smooth
-            avg_s = gaussian_blur_2d(weighted_s, sigma=target_sigma)
-            target_s = (avg_s / avg_weight).clamp(0.0, 1.0)
+                # Amount controls how far we pull toward the target
+                pull = amount / 100.0
 
-            # Amount controls how far we pull toward the target
-            pull = amount / 100.0
+                # Compute hue difference (circular, shortest path)
+                h_diff = target_h - h
+                h_diff = torch.where(h_diff > 180, h_diff - 360, h_diff)
+                h_diff = torch.where(h_diff < -180, h_diff + 360, h_diff)
 
-            # Compute hue difference (circular, shortest path)
-            h_diff = target_h - h
-            h_diff = torch.where(h_diff > 180, h_diff - 360, h_diff)
-            h_diff = torch.where(h_diff < -180, h_diff + 360, h_diff)
+                # Apply: pull hue and saturation toward target, weighted by mask
+                h_new = (h + mask_smooth * pull * h_diff) % 360.0
+                s_new = (s + mask_smooth * pull * (target_s - s)).clamp(0.0, 1.0)
 
-            # Apply: pull hue and saturation toward target, weighted by mask
-            h_new = (h + mask_smooth * pull * h_diff) % 360.0
-            s_new = (s + mask_smooth * pull * (target_s - s)).clamp(0.0, 1.0)
+                # Reconstruct with ORIGINAL luminance (preserves all texture/detail)
+                result = hsl_to_rgb(h_new, s_new, l).clamp(0.0, 1.0)
+                out = blend(img, result, strength)
 
-            # Reconstruct with ORIGINAL luminance (preserves all texture/detail)
-            result = hsl_to_rgb(h_new, s_new, l).clamp(0.0, 1.0)
-            results.append(blend(original, result, strength))
+                mask_vis = mask.unsqueeze(-1).expand(-1, -1, 3)
+                outs.append(torch.cat([out, mask_vis], dim=-1))
+            return torch.stack(outs, dim=0)
 
-            # Mask preview
-            mask_vis = mask.unsqueeze(-1).expand(-1, -1, 3)
-            masks.append(mask_vis)
-
-        return (torch.stack(results, dim=0), torch.stack(masks, dim=0))
+        both = run_on_device(even_out, image)
+        return (both[..., :3].contiguous(), both[..., 3:].contiguous())
 
 
 NODE_CLASS_MAPPINGS = {"DarkroomSkinToneUniformity": SkinToneUniformity}

@@ -6,10 +6,13 @@ Lightness and contrast hold hue and chroma; chroma is even across the wheel —
 """
 
 import numpy as np
+import torch
 
-from ..utils.color import srgb_to_linear, linear_to_srgb, blend
-from ..utils.image import tensor_to_numpy_batch, numpy_batch_to_tensor
-from ..utils.colorspace import (
+from ..utils.gpu_color import (
+    run_on_device,
+    srgb_to_linear,
+    linear_to_srgb,
+    blend,
     linear_srgb_to_oklab,
     oklab_to_linear_srgb,
     oklab_to_oklch,
@@ -84,36 +87,29 @@ class OkLabColor:
               f"chroma={chroma}, hue={hue}, tint_a={tint_a}, tint_b={tint_b}, strength={strength}")
 
         contrast_slope = 2.0 ** contrast
-        hue_rad = np.radians(hue).astype(np.float32)
+        hue_rad = float(np.radians(hue).astype(np.float32))
 
-        images = tensor_to_numpy_batch(image)
-        results = []
-
-        for img in images:
-            original = img.copy()
-            lin = srgb_to_linear(img)
-            lab = linear_srgb_to_oklab(lin)
+        def process(img):
+            original = img
+            lab = linear_srgb_to_oklab(srgb_to_linear(img))
 
             # tone (L only)
-            lab[..., 0] = lab[..., 0] * lightness
-            lab[..., 0] = 0.5 + (lab[..., 0] - 0.5) * contrast_slope
+            L = lab[..., 0] * lightness
+            L = 0.5 + (L - 0.5) * contrast_slope
+            lab = torch.stack([L, lab[..., 1], lab[..., 2]], dim=-1)
 
             # color (C / h only)
             lch = oklab_to_oklch(lab)
-            lch[..., 1] = lch[..., 1] * chroma
-            lch[..., 2] = lch[..., 2] + hue_rad
+            lch = torch.stack([lch[..., 0], lch[..., 1] * chroma, lch[..., 2] + hue_rad], dim=-1)
             lab = oklch_to_oklab(lch)
 
-            # tint (a, b offset — global cast, last)
-            lab[..., 1] = lab[..., 1] + tint_a
-            lab[..., 2] = lab[..., 2] + tint_b
+            # tint (a, b offset: global cast, last)
+            lab = torch.stack([lab[..., 0], lab[..., 1] + tint_a, lab[..., 2] + tint_b], dim=-1)
 
-            lin2 = oklab_to_linear_srgb(lab)
-            lin2 = np.clip(lin2, 0.0, 1.0)
-            out = linear_to_srgb(lin2)
-            results.append(blend(original, out, strength))
+            lin2 = oklab_to_linear_srgb(lab).clamp(0.0, 1.0)
+            return blend(original, linear_to_srgb(lin2), strength)
 
-        return (numpy_batch_to_tensor(results),)
+        return (run_on_device(process, image),)
 
 
 NODE_CLASS_MAPPINGS = {"DarkroomOkLabColor": OkLabColor}

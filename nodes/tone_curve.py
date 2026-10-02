@@ -4,10 +4,9 @@ Tone Curve node for ComfyUI-Darkroom.
 """
 
 import numpy as np
+import torch
 
-from ..utils.color import srgb_to_linear, linear_to_srgb, blend
-from ..utils.image import tensor_to_numpy_batch, numpy_batch_to_tensor
-from ..utils.grading import cubic_spline_curve
+from ..utils import gpu_color as G
 from ..data.grading_presets import TONE_CURVE_PRESETS, TONE_CURVE_PRESET_NAMES
 
 
@@ -148,22 +147,17 @@ class ToneCurve:
 
         print(f"[Darkroom] Tone Curve: preset={preset}, strength={strength}")
 
-        images = tensor_to_numpy_batch(image)
-        results = []
+        def _pipeline(x):
+            linear = G.srgb_to_linear(x)
+            result = torch.stack([
+                G.cubic_spline_curve(linear[..., 0], r_points),
+                G.cubic_spline_curve(linear[..., 1], g_points),
+                G.cubic_spline_curve(linear[..., 2], b_points),
+            ], dim=-1)
+            result = G.linear_to_srgb(result)
+            return G.blend(x, result, strength)
 
-        for img in images:
-            original = img.copy()
-            linear = srgb_to_linear(img)
-
-            result = np.empty_like(linear)
-            result[..., 0] = cubic_spline_curve(linear[..., 0], r_points)
-            result[..., 1] = cubic_spline_curve(linear[..., 1], g_points)
-            result[..., 2] = cubic_spline_curve(linear[..., 2], b_points)
-
-            result = linear_to_srgb(result)
-            results.append(blend(original, result, strength))
-
-        return (numpy_batch_to_tensor(results),)
+        return (G.run_on_device(_pipeline, image),)
 
 
 NODE_CLASS_MAPPINGS = {"DarkroomToneCurve": ToneCurve}

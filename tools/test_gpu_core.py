@@ -164,9 +164,14 @@ def _cases(key):
 
 
 def _run(key, image_arg, kwargs, image):
+    """Every tensor the node returns (image plus any matte/preview outputs)."""
     node = NCM[key]()
     out = getattr(node, NCM[key].FUNCTION)(**{image_arg: image, **kwargs})
-    return out[0]
+    return [o for o in out if torch.is_tensor(o)]
+
+
+def _okey(cid, k):
+    return cid if k == 0 else f"{cid}#{k}"
 
 
 def _commit():
@@ -190,9 +195,11 @@ def capture(only):
             for iname, img in INPUTS.items():
                 cid = f"{key}|{label}|{iname}"
                 try:
-                    out = _run(key, image_arg, {**base, **change}, img)
-                    arrays[cid] = out.numpy()
+                    outs = _run(key, image_arg, {**base, **change}, img)
+                    for k, o in enumerate(outs):
+                        arrays[_okey(cid, k)] = o.numpy()
                     meta["cases"][cid] = "ok"
+                    meta.setdefault("outputs", {})[cid] = len(outs)
                 except Exception as e:
                     meta["cases"][cid] = f"raised {type(e).__name__}"
         print(f"captured {key}: {len(cases)} param cases x {len(INPUTS)} inputs")
@@ -218,7 +225,7 @@ def compare(only):
                 total += 1
                 expect = meta["cases"][cid]
                 try:
-                    out = _run(key, image_arg, {**base, **change}, img)
+                    outs = _run(key, image_arg, {**base, **change}, img)
                 except Exception as e:
                     if expect == "ok":
                         fails += 1
@@ -228,27 +235,34 @@ def compare(only):
                     fails += 1
                     print(f"  FAIL {cid}: golden {expect}, new code returned")
                     continue
-                g = gold[cid]
-                o = out.detach().cpu().numpy()
-                if o.shape != g.shape or out.dtype != torch.float32 or out.device.type != "cpu":
+                n_out = meta.get("outputs", {}).get(cid, 1)
+                if len(outs) != n_out:
                     fails += 1
-                    print(f"  FAIL {cid}: shape/dtype/device {o.shape}/{out.dtype}/{out.device} vs {g.shape}")
+                    print(f"  FAIL {cid}: {len(outs)} tensor outputs, golden has {n_out}")
                     continue
-                if not np.isfinite(o).all():
-                    fails += 1
-                    print(f"  FAIL {cid}: NaN/inf")
-                    continue
-                d = float(np.abs(o - g).max())
-                node_worst = max(node_worst, d)
-                if d > TOL:
-                    fails += 1
-                    print(f"  FAIL {cid}: max|diff| {d:.6f} ({d * 255:.2f}/255)")
+                for k, out in enumerate(outs):
+                    g = gold[_okey(cid, k)]
+                    o = out.detach().cpu().numpy()
+                    tag = _okey(cid, k)
+                    if o.shape != g.shape or out.dtype != torch.float32 or out.device.type != "cpu":
+                        fails += 1
+                        print(f"  FAIL {tag}: shape/dtype/device {o.shape}/{out.dtype}/{out.device} vs {g.shape}")
+                        continue
+                    if not np.isfinite(o).all():
+                        fails += 1
+                        print(f"  FAIL {tag}: NaN/inf")
+                        continue
+                    d = float(np.abs(o - g).max())
+                    node_worst = max(node_worst, d)
+                    if d > TOL:
+                        fails += 1
+                        print(f"  FAIL {tag}: max|diff| {d:.6f} ({d * 255:.2f}/255)")
         # batch of two == two singles
         try:
             pair = torch.cat([INPUTS["noise"], INPUTS["photo"]], 0)
-            b = _run(key, image_arg, base, pair)
-            s = torch.cat([_run(key, image_arg, base, INPUTS["noise"]),
-                           _run(key, image_arg, base, INPUTS["photo"])], 0)
+            b = _run(key, image_arg, base, pair)[0]
+            s = torch.cat([_run(key, image_arg, base, INPUTS["noise"])[0],
+                           _run(key, image_arg, base, INPUTS["photo"])[0]], 0)
             total += 1
             if not torch.allclose(b, s, atol=1e-6, rtol=0):
                 fails += 1

@@ -5,11 +5,9 @@ Import looks from DaVinci Resolve, Premiere, Photoshop, or use Darkroom-exported
 """
 
 import os
-import numpy as np
 
-from ..utils.color import blend
-from ..utils.image import tensor_to_numpy_batch, numpy_batch_to_tensor
-from ..utils.lut import parse_cube_file, apply_lut_trilinear
+from ..utils.gpu_color import run_on_device, blend, lut_to_device, apply_lut_trilinear
+from ..utils.lut import parse_cube_file
 from ..utils.paths import resolve_allowed, PathNotAllowed
 
 
@@ -17,6 +15,8 @@ class LUTApply:
 
     # Cache parsed LUTs to avoid re-reading on every execution
     _lut_cache = {}
+    # Device copies of the parsed LUTs, uploaded once per (path, mtime, device)
+    _lut_device_cache = {}
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -56,6 +56,13 @@ class LUTApply:
 
         return LUTApply._lut_cache[cache_key]
 
+    def _get_lut_device(self, filepath, lut_3d, dev):
+        """Upload the parsed LUT once per (path, mtime, device)."""
+        key = (filepath, os.path.getmtime(filepath), str(dev))
+        if key not in LUTApply._lut_device_cache:
+            LUTApply._lut_device_cache[key] = lut_to_device(lut_3d, dev)
+        return LUTApply._lut_device_cache[key]
+
     def execute(self, image, lut_file, strength=1.0):
         if strength <= 0.0:
             return (image,)
@@ -76,15 +83,12 @@ class LUTApply:
 
         lut_3d, lut_size = self._get_lut(filepath)
 
-        images = tensor_to_numpy_batch(image)
-        results = []
+        def process(img):
+            lut_flat = self._get_lut_device(filepath, lut_3d, img.device)
+            graded = apply_lut_trilinear(img, lut_flat, lut_size)
+            return blend(img, graded, strength)
 
-        for img in images:
-            original = img.copy()
-            graded = apply_lut_trilinear(img, lut_3d, lut_size)
-            results.append(blend(original, graded, strength))
-
-        return (numpy_batch_to_tensor(results),)
+        return (run_on_device(process, image),)
 
 
 NODE_CLASS_MAPPINGS = {"DarkroomLUTApply": LUTApply}

@@ -3,12 +3,15 @@ Lum vs Sat node for ComfyUI-Darkroom.
 Adjust saturation based on luminance zones with presets and per-zone control.
 """
 
-import numpy as np
+import torch
 
-from ..utils.color import srgb_to_linear, linear_to_srgb, luminance_rec709, blend
-from ..utils.image import tensor_to_numpy_batch, numpy_batch_to_tensor
-from ..utils.raw import parametric_tone_mask
+from ..utils import gpu_color as G
 from ..data.grading_presets import LUM_VS_SAT_PRESETS, LUM_VS_SAT_PRESET_NAMES
+
+
+def _parametric_tone_mask(luminance, center, sigma):
+    """Torch mirror of utils.raw.parametric_tone_mask (Gaussian in luminance)."""
+    return torch.exp(-0.5 * ((luminance - center) / (sigma + 1e-10)) ** 2)
 
 
 # 5 luminance zones: center and sigma for Gaussian masks
@@ -95,30 +98,26 @@ class LumVsSat:
 
         print(f"[Darkroom] Lum vs Sat: preset={preset}, {len(active)} active zones, strength={strength}")
 
-        images = tensor_to_numpy_batch(image)
-        results = []
-
-        for img in images:
-            original = img.copy()
-            linear = srgb_to_linear(img)
-            lum = luminance_rec709(linear)
+        def _pipeline(x):
+            linear = G.srgb_to_linear(x)
+            lum = G.luminance_rec709(linear)
 
             # Compute combined saturation factor per pixel
-            sat_factor = np.ones_like(lum)
+            sat_factor = torch.ones_like(lum)
             for zone_name, adj_value in active:
                 center, sigma = LUM_ZONES[zone_name]
-                mask = parametric_tone_mask(lum, center, sigma)
-                sat_factor += mask * (adj_value / 100.0)
+                mask = _parametric_tone_mask(lum, center, sigma)
+                sat_factor = sat_factor + mask * (adj_value / 100.0)
 
             # Apply luminance-preserving saturation adjustment
-            lum_3d = lum[..., np.newaxis]
-            result = lum_3d + sat_factor[..., np.newaxis] * (linear - lum_3d)
-            result = np.clip(result, 0.0, 1.0).astype(np.float32)
+            lum_3d = lum[..., None]
+            result = lum_3d + sat_factor[..., None] * (linear - lum_3d)
+            result = result.clamp(0.0, 1.0)
 
-            result = linear_to_srgb(result)
-            results.append(blend(original, result, strength))
+            result = G.linear_to_srgb(result)
+            return G.blend(x, result, strength)
 
-        return (numpy_batch_to_tensor(results),)
+        return (G.run_on_device(_pipeline, image),)
 
 
 NODE_CLASS_MAPPINGS = {"DarkroomLumVsSat": LumVsSat}

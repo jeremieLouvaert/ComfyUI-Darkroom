@@ -10,11 +10,10 @@ Matte preview output lets you see exactly what's selected.
 """
 
 import numpy as np
-from scipy.ndimage import gaussian_filter, binary_erosion, binary_dilation
+import torch
+import torch.nn.functional as F
 
-from ..utils.color import blend
-from ..utils.image import tensor_to_numpy_batch, numpy_batch_to_tensor
-from ..utils.raw import rgb_to_hsl, hsl_to_rgb
+from ..utils.gpu_color import blend, rgb_to_hsl, hsl_to_rgb, run_on_device
 
 
 # Action presets: selection params + built-in correction
@@ -50,28 +49,64 @@ PRESET_LIST = list(ACTION_PRESETS.keys())
 
 def _soft_range(values, center, width, softness, wrap=None):
     """
-    Compute a soft selection mask for values within center±width,
+    Compute a soft selection mask for values within center+-width,
     with smooth falloff controlled by softness.
     """
+    diff = torch.abs(values - center)
     if wrap is not None:
-        diff = np.abs(values - center)
-        diff = np.minimum(diff, wrap - diff)
-    else:
-        diff = np.abs(values - center)
+        diff = torch.minimum(diff, wrap - diff)
 
     half_width = width * 0.5
     soft_zone = half_width * softness
 
-    mask = np.ones_like(values, dtype=np.float32)
+    mask = torch.ones_like(values)
 
-    transition = (diff > half_width) & (diff <= half_width + soft_zone)
     if soft_zone > 0.01:
-        t = (diff[transition] - half_width) / (soft_zone + 1e-10)
-        mask[transition] = (1.0 + np.cos(np.pi * t)) * 0.5
+        transition = (diff > half_width) & (diff <= half_width + soft_zone)
+        t = (diff - half_width) / (soft_zone + 1e-10)
+        mask = torch.where(transition, (1.0 + torch.cos(np.pi * t)) * 0.5, mask)
 
-    mask[diff > half_width + soft_zone] = 0.0
+    return torch.where(diff > half_width + soft_zone, torch.zeros_like(mask), mask)
 
-    return mask.astype(np.float32)
+
+def _gaussian_filter(x, sigma):
+    """
+    scipy.ndimage.gaussian_filter on (B, H, W): truncate=4.0, mode='reflect'
+    (half-sample symmetric, edge pixel repeated), separable, per image.
+    """
+    radius = int(4.0 * sigma + 0.5)
+    if radius < 1:
+        return x
+    ax = torch.arange(-radius, radius + 1, dtype=torch.float64)
+    k = torch.exp(-0.5 * ax * ax / (sigma * sigma))
+    k = (k / k.sum()).to(device=x.device, dtype=x.dtype)
+
+    def reflect_pad(t, dim):
+        n = t.shape[dim]
+        idx = torch.arange(-radius, n + radius, device=t.device) % (2 * n)
+        idx = torch.where(idx >= n, 2 * n - 1 - idx, idx)
+        return t.index_select(dim, idx)
+
+    y = F.conv2d(reflect_pad(x, 1).unsqueeze(1), k.view(1, 1, -1, 1))
+    y = F.conv2d(reflect_pad(y.squeeze(1), 2).unsqueeze(1), k.view(1, 1, 1, -1))
+    return y.squeeze(1)
+
+
+def _binary_morph(binary, iterations, erode):
+    """
+    scipy binary_erosion / binary_dilation with the default 4-connected cross
+    structure and border_value=0, on a (B, H, W) bool tensor.
+    """
+    for _ in range(iterations):
+        p = F.pad(binary, (1, 1, 1, 1), value=False)
+        c = p[:, 1:-1, 1:-1]
+        up, down = p[:, :-2, 1:-1], p[:, 2:, 1:-1]
+        left, right = p[:, 1:-1, :-2], p[:, 1:-1, 2:]
+        if erode:
+            binary = c & up & down & left & right
+        else:
+            binary = c | up | down | left | right
+    return binary
 
 
 class ColorQualifier:
@@ -185,12 +220,12 @@ class ColorQualifier:
             saturation_adjust = preset_sat + saturation_adjust
             luminance_adjust = preset_lum + luminance_adjust
 
-        images = tensor_to_numpy_batch(image)
-        results = []
-        mattes = []
+        # Corrections are decided once from the params, as in the per-image loop
+        has_correction = (abs(hue_shift) > 0.1 or
+                          abs(saturation_adjust) > 0.5 or
+                          abs(luminance_adjust) > 0.5)
 
-        for img in images:
-            original = img.copy()
+        def qualify(img):
             h, s, l = rgb_to_hsl(img)
 
             # Build qualifier matte
@@ -204,58 +239,47 @@ class ColorQualifier:
             if matte_shrink != 0:
                 binary = matte > 0.5
                 iterations = abs(matte_shrink)
-                if matte_shrink > 0:
-                    refined = binary_erosion(binary, iterations=iterations)
-                else:
-                    refined = binary_dilation(binary, iterations=iterations)
-                matte = np.where(refined, np.maximum(matte, 0.5), np.minimum(matte, 0.5))
-                matte = np.clip(matte, 0.0, 1.0)
+                refined = _binary_morph(binary, iterations, erode=matte_shrink > 0)
+                matte = torch.where(refined, torch.clamp(matte, min=0.5), torch.clamp(matte, max=0.5))
+                matte = matte.clamp(0.0, 1.0)
 
             # Matte finesse: blur
             if matte_blur > 0.1:
-                matte = gaussian_filter(matte, sigma=matte_blur)
+                matte = _gaussian_filter(matte, matte_blur)
 
             # Invert
             if invert_matte == "yes":
                 matte = 1.0 - matte
 
-            matte = matte.astype(np.float32)
-
             # Apply corrections
-            has_correction = (abs(hue_shift) > 0.1 or
-                              abs(saturation_adjust) > 0.5 or
-                              abs(luminance_adjust) > 0.5)
-
             if has_correction and strength > 0.0:
-                h_new = h.copy()
-                s_new = s.copy()
-                l_new = l.copy()
+                h_new = h
+                s_new = s
+                l_new = l
 
                 if abs(hue_shift) > 0.1:
                     h_new = (h_new + matte * hue_shift) % 360.0
 
                 if abs(saturation_adjust) > 0.5:
                     s_new = s_new * (1.0 + matte * (saturation_adjust / 100.0))
-                    s_new = np.clip(s_new, 0.0, 1.0)
+                    s_new = s_new.clamp(0.0, 1.0)
 
                 if abs(luminance_adjust) > 0.5:
                     l_new = l_new * (1.0 + matte * (luminance_adjust / 100.0))
-                    l_new = np.clip(l_new, 0.0, 1.0)
+                    l_new = l_new.clamp(0.0, 1.0)
 
-                result = hsl_to_rgb(h_new.astype(np.float32),
-                                    s_new.astype(np.float32),
-                                    l_new.astype(np.float32))
-                result = np.clip(result, 0.0, 1.0).astype(np.float32)
-                results.append(blend(original, result, strength))
+                result = hsl_to_rgb(h_new, s_new, l_new)
+                result = result.clamp(0.0, 1.0)
+                out = blend(img, result, strength)
             else:
-                results.append(original)
+                out = img
 
-            # Matte preview
-            matte_vis = np.stack([matte, matte, matte], axis=-1).astype(np.float32)
-            mattes.append(matte_vis)
+            # Matte preview rides along as channels 3..5 so one device pass returns both
+            matte_vis = torch.stack([matte, matte, matte], dim=-1)
+            return torch.cat([out, matte_vis], dim=-1)
 
-        return (numpy_batch_to_tensor(results),
-                numpy_batch_to_tensor(mattes))
+        both = run_on_device(qualify, image)
+        return (both[..., :3].contiguous(), both[..., 3:].contiguous())
 
 
 NODE_CLASS_MAPPINGS = {"DarkroomColorQualifier": ColorQualifier}

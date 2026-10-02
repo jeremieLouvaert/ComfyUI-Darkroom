@@ -3,11 +3,7 @@ Log Wheels node for ComfyUI-Darkroom.
 DaVinci Resolve Log-mode color grading with soft zone masks in log2 space.
 """
 
-import numpy as np
-
-from ..utils.color import srgb_to_linear, linear_to_srgb, luminance_rec709, blend
-from ..utils.image import tensor_to_numpy_batch, numpy_batch_to_tensor
-from ..utils.grading import log_zone_masks, apply_color_tint_to_zone
+from ..utils import gpu_color as G
 from ..data.grading_presets import LOG_WHEELS_PRESETS, LOG_WHEELS_PRESET_NAMES
 
 
@@ -129,45 +125,41 @@ class LogWheels:
         print(f"[Darkroom] Log Wheels: preset={preset}, shadow_range={s_range}, "
               f"highlight_range={h_range}, strength={strength}")
 
-        images = tensor_to_numpy_batch(image)
-        results = []
-
-        for img in images:
-            original = img.copy()
-            linear = srgb_to_linear(img)
-            lum = luminance_rec709(linear)
+        def _pipeline(x):
+            linear = G.srgb_to_linear(x)
+            lum = G.luminance_rec709(linear)
 
             # Build soft log-space zone masks
-            shadow_mask, midtone_mask, highlight_mask = log_zone_masks(lum, s_range, h_range)
+            shadow_mask, midtone_mask, highlight_mask = G.log_zone_masks(lum, s_range, h_range)
 
-            result = linear.copy()
+            result = linear
 
             # Apply color tints per zone
             if s_sat >= 0.5:
-                result = apply_color_tint_to_zone(result, shadow_mask, s_hue, s_sat)
+                result = G.apply_color_tint_to_zone(result, shadow_mask, s_hue, s_sat)
             if m_sat >= 0.5:
-                result = apply_color_tint_to_zone(result, midtone_mask, m_hue, m_sat)
+                result = G.apply_color_tint_to_zone(result, midtone_mask, m_hue, m_sat)
             if h_sat >= 0.5:
-                result = apply_color_tint_to_zone(result, highlight_mask, h_hue, h_sat)
+                result = G.apply_color_tint_to_zone(result, highlight_mask, h_hue, h_sat)
 
             # Apply density (brightness) shifts per zone
             if abs(s_den) >= 0.5:
                 density_factor = 1.0 + s_den / 100.0 * 0.5
-                result *= (1.0 + shadow_mask[..., np.newaxis] * (density_factor - 1.0))
+                result = result * (1.0 + shadow_mask[..., None] * (density_factor - 1.0))
 
             if abs(m_den) >= 0.5:
                 density_factor = 1.0 + m_den / 100.0 * 0.3
-                result *= (1.0 + midtone_mask[..., np.newaxis] * (density_factor - 1.0))
+                result = result * (1.0 + midtone_mask[..., None] * (density_factor - 1.0))
 
             if abs(h_den) >= 0.5:
                 density_factor = 1.0 + h_den / 100.0 * 0.5
-                result *= (1.0 + highlight_mask[..., np.newaxis] * (density_factor - 1.0))
+                result = result * (1.0 + highlight_mask[..., None] * (density_factor - 1.0))
 
-            result = np.clip(result, 0.0, 1.0).astype(np.float32)
-            result = linear_to_srgb(result)
-            results.append(blend(original, result, strength))
+            result = result.clamp(0.0, 1.0)
+            result = G.linear_to_srgb(result)
+            return G.blend(x, result, strength)
 
-        return (numpy_batch_to_tensor(results),)
+        return (G.run_on_device(_pipeline, image),)
 
 
 NODE_CLASS_MAPPINGS = {"DarkroomLogWheels": LogWheels}

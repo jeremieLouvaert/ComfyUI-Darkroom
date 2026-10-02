@@ -4,12 +4,13 @@ Per-hue adjustments to Hue, Saturation, and Luminance with smooth feathered tran
 """
 
 import numpy as np
+import torch
 
 from dataclasses import asdict
 
-from ..utils.color import srgb_to_linear, linear_to_srgb, blend
-from ..utils.image import tensor_to_numpy_batch, numpy_batch_to_tensor
-from ..utils.raw import rgb_to_hsl, hsl_to_rgb
+from ..utils.gpu_color import (
+    srgb_to_linear, linear_to_srgb, blend, rgb_to_hsl, hsl_to_rgb, run_on_device,
+)
 from ..data.ai_mitigation_presets import AI_MITIGATION_HSL, HSL_PRESET_NAMES
 
 
@@ -35,14 +36,13 @@ def _hue_weight(hue, center, width=HUE_WIDTH):
     Handles wraparound at 0/360.
     """
     # Angular distance with wraparound
-    diff = np.abs(hue - center)
-    diff = np.minimum(diff, 360.0 - diff)
+    diff = torch.abs(hue - center)
+    diff = torch.minimum(diff, 360.0 - diff)
 
     # Raised cosine: cos-based smooth falloff within width
-    weight = np.clip((1.0 + np.cos(np.pi * diff / width)) * 0.5, 0.0, 1.0)
+    weight = ((1.0 + torch.cos(np.pi * diff / width)) * 0.5).clamp(0.0, 1.0)
     # Zero out beyond the width
-    weight[diff > width] = 0.0
-    return weight.astype(np.float32)
+    return torch.where(diff > width, torch.zeros_like(weight), weight)
 
 
 class HSLSelective:
@@ -104,11 +104,7 @@ class HSLSelective:
         if not adjustments:
             return (image,)
 
-        images = tensor_to_numpy_batch(image)
-        results = []
-
-        for img in images:
-            original = img.copy()
+        def grade(img):
             linear = srgb_to_linear(img)
 
             h, s, l = rgb_to_hsl(linear)
@@ -122,17 +118,17 @@ class HSLSelective:
 
                 if abs(s_adj) > 0.5:
                     s = s * (1.0 + weight * (s_adj / 100.0))
-                    s = np.clip(s, 0.0, 1.0)
+                    s = s.clamp(0.0, 1.0)
 
                 if abs(l_adj) > 0.5:
                     l = l * (1.0 + weight * (l_adj / 100.0))
-                    l = np.clip(l, 0.0, 1.0)
+                    l = l.clamp(0.0, 1.0)
 
             result = hsl_to_rgb(h, s, l)
             result = linear_to_srgb(result)
-            results.append(blend(original, result, strength))
+            return blend(img, result, strength)
 
-        return (numpy_batch_to_tensor(results),)
+        return (run_on_device(grade, image),)
 
 
 NODE_CLASS_MAPPINGS = {"DarkroomHSLSelective": HSLSelective}

@@ -3,11 +3,9 @@
 Preset-first creative color tinting in shadows/midtones/highlights.
 """
 
-import numpy as np
+import torch
 
-from ..utils.color import srgb_to_linear, linear_to_srgb, luminance_rec709, adjust_saturation, blend
-from ..utils.image import tensor_to_numpy_batch, numpy_batch_to_tensor
-from ..utils.grading import lgg_zone_masks, apply_color_tint_to_zone
+from ..utils import gpu_color as G
 from ..data.grading_presets import COLOR_BALANCE_PRESETS, COLOR_BALANCE_PRESET_NAMES
 
 
@@ -104,43 +102,38 @@ class ThreeWayColorBalance:
         print(f"[Darkroom] 3-Way Color Balance: preset={preset}, S={s_hue:.0f}/{s_int:.0f}, "
               f"M={m_hue:.0f}/{m_int:.0f}, H={h_hue:.0f}/{h_int:.0f}, strength={strength}")
 
-        images = tensor_to_numpy_batch(image)
-        results = []
-
-        for img in images:
-            original = img.copy()
-            linear = srgb_to_linear(img)
-            lum = luminance_rec709(linear)
+        def _pipeline(x):
+            linear = G.srgb_to_linear(x)
+            lum = G.luminance_rec709(linear)
 
             # Build zone masks
-            lift_mask, gamma_mask, gain_mask = lgg_zone_masks(lum)
+            lift_mask, gamma_mask, gain_mask = G.lgg_zone_masks(lum)
 
-            result = linear.copy()
+            result = linear
 
             # Apply tints per zone
             if s_int >= 0.5:
-                result = apply_color_tint_to_zone(result, lift_mask, s_hue, s_int)
+                result = G.apply_color_tint_to_zone(result, lift_mask, s_hue, s_int)
             if m_int >= 0.5:
-                result = apply_color_tint_to_zone(result, gamma_mask, m_hue, m_int)
+                result = G.apply_color_tint_to_zone(result, gamma_mask, m_hue, m_int)
             if h_int >= 0.5:
-                result = apply_color_tint_to_zone(result, gain_mask, h_hue, h_int)
+                result = G.apply_color_tint_to_zone(result, gain_mask, h_hue, h_int)
 
             # Preserve luminance: restore original luminance channel
             if preserve_luminance:
-                new_lum = luminance_rec709(result)
-                scale = np.where(new_lum > 1e-6, lum / (new_lum + 1e-10), 1.0)
-                result = result * scale[..., np.newaxis]
-                result = np.clip(result, 0.0, 1.0).astype(np.float32)
+                new_lum = G.luminance_rec709(result)
+                scale = torch.where(new_lum > 1e-6, lum / (new_lum + 1e-10), torch.ones_like(lum))
+                result = (result * scale[..., None]).clamp(0.0, 1.0)
 
             # Master saturation
             if abs(m_sat) >= 0.5:
-                factor = 1.0 + m_sat / 50.0  # -50→0, 0→1, +50→2
-                result = adjust_saturation(result, factor)
+                factor = 1.0 + m_sat / 50.0  # -50->0, 0->1, +50->2
+                result = G.adjust_saturation(result, factor)
 
-            result = linear_to_srgb(result)
-            results.append(blend(original, result, strength))
+            result = G.linear_to_srgb(result)
+            return G.blend(x, result, strength)
 
-        return (numpy_batch_to_tensor(results),)
+        return (G.run_on_device(_pipeline, image),)
 
 
 NODE_CLASS_MAPPINGS = {"DarkroomThreeWayColorBalance": ThreeWayColorBalance}

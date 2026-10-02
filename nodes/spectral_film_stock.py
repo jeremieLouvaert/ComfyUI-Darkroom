@@ -16,9 +16,8 @@ import json
 import os
 from pathlib import Path
 
-from ..utils.color import blend
-from ..utils.image import tensor_to_numpy_batch, numpy_batch_to_tensor
-from ..utils.lut import parse_cube_file, apply_lut_trilinear
+from ..utils.gpu_color import run_on_device, blend, lut_to_device, apply_lut_trilinear
+from ..utils.lut import parse_cube_file
 
 _HERE = Path(__file__).resolve().parent
 _DATA_DIR = _HERE.parent / "data" / "spectral_luts"
@@ -70,6 +69,8 @@ _LABELS, _LABEL_TO_FILE = _build_labels(_PRESETS)
 class SpectralFilmStock:
 
     _lut_cache: dict = {}
+    # Device copies of the parsed LUTs, uploaded once per (path, mtime, device)
+    _lut_device_cache: dict = {}
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -118,6 +119,12 @@ class SpectralFilmStock:
             print(f"[Darkroom] Spectral Film Stock: loaded {size}^3 LUT from {path.name}")
         return SpectralFilmStock._lut_cache[key]
 
+    def _get_lut_device(self, path: Path, lut_3d, dev):
+        key = (str(path), os.path.getmtime(path), str(dev))
+        if key not in SpectralFilmStock._lut_device_cache:
+            SpectralFilmStock._lut_device_cache[key] = lut_to_device(lut_3d, dev)
+        return SpectralFilmStock._lut_device_cache[key]
+
     def execute(self, image, preset, strength=1.0):
         if strength <= 0.0 or not _LABELS:
             return (image,)
@@ -125,14 +132,14 @@ class SpectralFilmStock:
         path = self._resolve(preset)
         lut_3d, lut_size = self._get_lut(path)
 
-        images = tensor_to_numpy_batch(image)
-        results = []
-        for img in images:
-            graded = apply_lut_trilinear(img, lut_3d, lut_size)
-            results.append(blend(img, graded, strength))
+        def process(img):
+            lut_flat = self._get_lut_device(path, lut_3d, img.device)
+            graded = apply_lut_trilinear(img, lut_flat, lut_size)
+            return blend(img, graded, strength)
 
+        out = run_on_device(process, image)
         print(f"[Darkroom] Spectral Film Stock: {preset} (strength={strength:.2f})")
-        return (numpy_batch_to_tensor(results),)
+        return (out,)
 
 
 NODE_CLASS_MAPPINGS = {"DarkroomSpectralFilmStock": SpectralFilmStock}

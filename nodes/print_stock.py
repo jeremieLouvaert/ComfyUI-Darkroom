@@ -7,14 +7,13 @@ Chain after Film Stock (Color) for the full photochemical pipeline:
   Image → Film Stock (Color) [negative] → Print Stock [print] → Output
 """
 
-import numpy as np
+import torch
 
 from ..data.print_stocks import PRINT_STOCKS, PRINT_STOCK_NAMES
-from ..utils.color import (
+from ..utils.gpu_color import (run_on_device,
     srgb_to_linear, linear_to_srgb, apply_per_channel_curves,
     adjust_saturation, blend
 )
-from ..utils.image import tensor_to_numpy_batch, numpy_batch_to_tensor
 
 
 class PrintStock:
@@ -61,10 +60,7 @@ class PrintStock:
         b_params = (stock.b_curve.toe_power, stock.b_curve.shoulder_power,
                     stock.b_curve.slope, stock.b_curve.pivot_x, stock.b_curve.pivot_y)
 
-        arrays = tensor_to_numpy_batch(image)
-        processed = []
-
-        for original in arrays:
+        def pipeline(original):
             # Linearize
             linear = srgb_to_linear(original)
 
@@ -85,21 +81,20 @@ class PrintStock:
                 # Steepen the curve around the midpoint
                 above = printed > midpoint
                 boost = 1.0 + contrast_boost * 0.5
-                printed = np.where(
+                printed = torch.where(
                     above,
                     midpoint + (printed - midpoint) * boost,
                     midpoint - (midpoint - printed) * boost
                 )
-                printed = np.clip(printed, 0.0, 1.0)
+                printed = printed.clamp(0.0, 1.0)
 
             # Back to display gamma
             result = linear_to_srgb(printed)
 
             # Blend with original
-            result = blend(original, result, strength)
-            processed.append(result)
+            return blend(original, result, strength)
 
-        return (numpy_batch_to_tensor(processed),)
+        return (run_on_device(pipeline, image),)
 
 
 NODE_CLASS_MAPPINGS = {

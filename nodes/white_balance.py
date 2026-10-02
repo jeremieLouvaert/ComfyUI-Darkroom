@@ -4,9 +4,9 @@ Adjusts color temperature and tint in linear light.
 """
 
 import numpy as np
+import torch
 
-from ..utils.color import srgb_to_linear, linear_to_srgb, blend
-from ..utils.image import tensor_to_numpy_batch, numpy_batch_to_tensor
+from ..utils.gpu_color import run_on_device, srgb_to_linear, linear_to_srgb, blend
 from ..utils.raw import kelvin_to_rgb
 
 
@@ -41,9 +41,6 @@ class WhiteBalance:
         if strength <= 0.0 and temperature == 6500 and abs(tint) < 0.01:
             return (image,)
 
-        images = tensor_to_numpy_batch(image)
-        results = []
-
         # Compute channel multipliers from temperature shift
         source_rgb = np.array(kelvin_to_rgb(6500), dtype=np.float32)
         target_rgb = np.array(kelvin_to_rgb(temperature), dtype=np.float32)
@@ -59,19 +56,21 @@ class WhiteBalance:
         # Normalize so max multiplier = 1.0 (prevent clipping, just shift ratios)
         multipliers /= multipliers.max()
 
-        for img in images:
-            original = img.copy()
+        m_r, m_g, m_b = (float(m) for m in multipliers)
+
+        def process(img):
+            original = img
             linear = srgb_to_linear(img)
 
             # Apply white balance multipliers
-            linear[..., 0] *= multipliers[0]
-            linear[..., 1] *= multipliers[1]
-            linear[..., 2] *= multipliers[2]
+            linear = torch.stack([linear[..., 0] * m_r,
+                                  linear[..., 1] * m_g,
+                                  linear[..., 2] * m_b], dim=-1)
 
-            result = linear_to_srgb(np.clip(linear, 0.0, 1.0))
-            results.append(blend(original, result, strength))
+            result = linear_to_srgb(linear.clamp(0.0, 1.0))
+            return blend(original, result, strength)
 
-        return (numpy_batch_to_tensor(results),)
+        return (run_on_device(process, image),)
 
 
 NODE_CLASS_MAPPINGS = {"DarkroomWhiteBalance": WhiteBalance}

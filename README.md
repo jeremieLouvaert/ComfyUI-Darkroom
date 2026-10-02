@@ -252,6 +252,7 @@ All processing happens in **linear light** (sRGB gamma removed before processing
 - **Strength slider** (0-1): non-destructive blending with original
 - **Batch processing**: handles ComfyUI's multi-image batches
 - **Preset + override**: presets provide instant results, sliders fine-tune
+- **GPU acceleration**: since 1.28.0 the colour-grading and film-stock nodes (24 of them: film stocks, HSL and hue/sat curves, tone curve, colour wheels, qualifier, LUT and colour-space nodes) run their whole pipeline on the GPU, typically 15-80x faster than before on a 24 MP image (a median of about 35x). Output is unchanged to within half an 8-bit code value. Without a GPU, or with ComfyUI's `--cpu`, the same code runs multithreaded on the CPU.
 
 Film stock data sourced from Capture One Film Styles (586 .costyle files parsed) and published Kodak/Fuji/Ilford technical data sheets. Lens profiles measured from real optical characteristics.
 

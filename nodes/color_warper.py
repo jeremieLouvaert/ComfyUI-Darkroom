@@ -2,15 +2,14 @@
 Color Warper node for ComfyUI-Darkroom.
 2D hue+saturation region warping with multi-region presets.
 
-GPU-accelerated via torch. No CPU roundtrip.
+Runs on ComfyUI's device via utils/gpu_color (one upload, one download).
 """
 
-import torch
-
-from ..utils.torch_ops import (
+from ..utils.gpu_color import (
     srgb_to_linear, linear_to_srgb, rgb_to_hsl, hsl_to_rgb,
-    hue_range_mask, sat_range_weight, blend,
+    hue_range_mask, blend, run_on_device,
 )
+from ..utils.torch_ops import sat_range_weight
 from ..data.grading_presets import COLOR_WARPER_PRESETS, COLOR_WARPER_PRESET_NAMES
 
 
@@ -102,12 +101,7 @@ class ColorWarper:
 
         print(f"[Darkroom] Color Warper: preset={preset}, strength={strength}")
 
-        batch_size = image.shape[0]
-        results = []
-
-        for i in range(batch_size):
-            img = image[i]  # (H, W, C) stays on device
-            original = img.clone()
+        def warp(img):
             linear = srgb_to_linear(img)
             h, s, l = rgb_to_hsl(linear)
 
@@ -141,9 +135,9 @@ class ColorWarper:
 
             result = hsl_to_rgb(h, s, l)
             result = linear_to_srgb(result)
-            results.append(blend(original, result, strength))
+            return blend(img, result, strength)
 
-        return (torch.stack(results, dim=0),)
+        return (run_on_device(warp, image),)
 
 
 NODE_CLASS_MAPPINGS = {"DarkroomColorWarper": ColorWarper}

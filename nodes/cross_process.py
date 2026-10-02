@@ -4,11 +4,10 @@ Simulates developing film in the wrong chemistry.
 """
 
 from ..data.cross_process_curves import CROSS_PROCESS_PROFILES, CROSS_PROCESS_NAMES
-from ..utils.color import (
+from ..utils.gpu_color import (run_on_device,
     srgb_to_linear, linear_to_srgb, apply_per_channel_curves,
     adjust_saturation, blend
 )
-from ..utils.image import tensor_to_numpy_batch, numpy_batch_to_tensor
 
 
 class CrossProcess:
@@ -48,10 +47,7 @@ class CrossProcess:
         b_params = (profile.b_curve.toe_power, profile.b_curve.shoulder_power,
                     profile.b_curve.slope, profile.b_curve.pivot_x, profile.b_curve.pivot_y)
 
-        arrays = tensor_to_numpy_batch(image)
-        processed = []
-
-        for original in arrays:
+        def pipeline(original):
             # Linearize
             linear = srgb_to_linear(original)
 
@@ -66,10 +62,9 @@ class CrossProcess:
             result = linear_to_srgb(xpro)
 
             # Blend with original
-            result = blend(original, result, strength)
-            processed.append(result)
+            return blend(original, result, strength)
 
-        return (numpy_batch_to_tensor(processed),)
+        return (run_on_device(pipeline, image),)
 
 
 NODE_CLASS_MAPPINGS = {

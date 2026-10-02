@@ -3,12 +3,10 @@ Hue vs Hue node for ComfyUI-Darkroom.
 Remap specific hue ranges to different hues with presets and per-band control.
 """
 
-import numpy as np
-
-from ..utils.color import srgb_to_linear, linear_to_srgb, blend
-from ..utils.image import tensor_to_numpy_batch, numpy_batch_to_tensor
-from ..utils.raw import rgb_to_hsl, hsl_to_rgb
-from ..utils.grading import hue_range_mask
+from ..utils.gpu_color import (
+    srgb_to_linear, linear_to_srgb, blend, rgb_to_hsl, hsl_to_rgb,
+    hue_range_mask, run_on_device,
+)
 from ..data.grading_presets import HUE_VS_HUE_PRESETS, HUE_VS_HUE_PRESET_NAMES
 
 
@@ -121,11 +119,7 @@ class HueVsHue:
 
         print(f"[Darkroom] Hue vs Hue: preset={preset}, {len(active)} active bands, strength={strength}")
 
-        images = tensor_to_numpy_batch(image)
-        results = []
-
-        for img in images:
-            original = img.copy()
+        def grade(img):
             linear = srgb_to_linear(img)
             h, s, l = rgb_to_hsl(linear)
 
@@ -137,9 +131,9 @@ class HueVsHue:
 
             result = hsl_to_rgb(h, s, l)
             result = linear_to_srgb(result)
-            results.append(blend(original, result, strength))
+            return blend(img, result, strength)
 
-        return (numpy_batch_to_tensor(results),)
+        return (run_on_device(grade, image),)
 
 
 NODE_CLASS_MAPPINGS = {"DarkroomHueVsHue": HueVsHue}

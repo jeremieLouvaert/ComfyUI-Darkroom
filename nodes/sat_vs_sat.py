@@ -3,11 +3,9 @@ Sat vs Sat node for ComfyUI-Darkroom.
 Adjust saturation based on existing saturation level with presets and per-zone control.
 """
 
-import numpy as np
+import torch
 
-from ..utils.color import srgb_to_linear, linear_to_srgb, luminance_rec709, blend
-from ..utils.image import tensor_to_numpy_batch, numpy_batch_to_tensor
-from ..utils.grading import sat_from_rgb, sat_range_mask
+from ..utils import gpu_color as G
 from ..data.grading_presets import SAT_VS_SAT_PRESETS, SAT_VS_SAT_PRESET_NAMES
 
 
@@ -88,33 +86,29 @@ class SatVsSat:
 
         print(f"[Darkroom] Sat vs Sat: preset={preset}, {len(active)} active zones, strength={strength}")
 
-        images = tensor_to_numpy_batch(image)
-        results = []
-
-        for img in images:
-            original = img.copy()
-            linear = srgb_to_linear(img)
-            lum = luminance_rec709(linear)
+        def _pipeline(x):
+            linear = G.srgb_to_linear(x)
+            lum = G.luminance_rec709(linear)
 
             # Compute per-pixel saturation
-            sat = sat_from_rgb(linear)
+            sat = G.sat_from_rgb(linear)
 
             # Compute combined adjustment factor
-            sat_factor = np.ones_like(sat)
+            sat_factor = torch.ones_like(sat)
             for zone_name, adj_value in active:
                 center, width = SAT_ZONES[zone_name]
-                mask = sat_range_mask(sat, center, width)
-                sat_factor += mask * (adj_value / 100.0)
+                mask = G.sat_range_mask(sat, center, width)
+                sat_factor = sat_factor + mask * (adj_value / 100.0)
 
             # Apply luminance-preserving saturation scaling
-            lum_3d = lum[..., np.newaxis]
-            result = lum_3d + sat_factor[..., np.newaxis] * (linear - lum_3d)
-            result = np.clip(result, 0.0, 1.0).astype(np.float32)
+            lum_3d = lum[..., None]
+            result = lum_3d + sat_factor[..., None] * (linear - lum_3d)
+            result = result.clamp(0.0, 1.0)
 
-            result = linear_to_srgb(result)
-            results.append(blend(original, result, strength))
+            result = G.linear_to_srgb(result)
+            return G.blend(x, result, strength)
 
-        return (numpy_batch_to_tensor(results),)
+        return (G.run_on_device(_pipeline, image),)
 
 
 NODE_CLASS_MAPPINGS = {"DarkroomSatVsSat": SatVsSat}

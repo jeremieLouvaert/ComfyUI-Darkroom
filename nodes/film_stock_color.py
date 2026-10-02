@@ -3,14 +3,11 @@ Film Stock (Color) node for ComfyUI-Darkroom.
 Applies per-channel characteristic curves for real film stock emulation.
 """
 
-import numpy as np
-
 from ..data.color_stocks import COLOR_STOCKS, COLOR_STOCK_NAMES, CurveParams
-from ..utils.color import (
+from ..utils.gpu_color import (run_on_device,
     srgb_to_linear, linear_to_srgb, apply_per_channel_curves,
     adjust_saturation, split_tone, blend
 )
-from ..utils.image import tensor_to_numpy_batch, numpy_batch_to_tensor
 
 
 class FilmStockColor:
@@ -71,10 +68,10 @@ class FilmStockColor:
         g_params = self._apply_overrides(stock.g_curve, override_toe, override_shoulder, override_gamma)
         b_params = self._apply_overrides(stock.b_curve, override_toe, override_shoulder, override_gamma)
 
-        arrays = tensor_to_numpy_batch(image)
-        processed = []
+        has_shadow_tint = any(abs(v) > 0.001 for v in stock.shadow_tint)
+        has_highlight_tint = any(abs(v) > 0.001 for v in stock.highlight_tint)
 
-        for original in arrays:
+        def pipeline(original):
             # Linearize (remove sRGB gamma)
             linear = srgb_to_linear(original)
 
@@ -86,8 +83,6 @@ class FilmStockColor:
                 curved = adjust_saturation(curved, stock.saturation)
 
             # Apply shadow/highlight tinting
-            has_shadow_tint = any(abs(v) > 0.001 for v in stock.shadow_tint)
-            has_highlight_tint = any(abs(v) > 0.001 for v in stock.highlight_tint)
             if has_shadow_tint or has_highlight_tint:
                 curved = split_tone(curved, stock.shadow_tint, stock.highlight_tint)
 
@@ -95,10 +90,9 @@ class FilmStockColor:
             result = linear_to_srgb(curved)
 
             # Blend with original in sRGB space (perceptually correct)
-            result = blend(original, result, strength)
-            processed.append(result)
+            return blend(original, result, strength)
 
-        return (numpy_batch_to_tensor(processed),)
+        return (run_on_device(pipeline, image),)
 
 
 NODE_CLASS_MAPPINGS = {

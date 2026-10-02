@@ -3,11 +3,14 @@ Exposure & Tone node for ComfyUI-Darkroom.
 Lightroom-style tonal controls with parametric luminance masks.
 """
 
-import numpy as np
+import torch
 
-from ..utils.color import srgb_to_linear, linear_to_srgb, luminance_rec709, blend
-from ..utils.image import tensor_to_numpy_batch, numpy_batch_to_tensor
-from ..utils.raw import parametric_tone_mask
+from ..utils.gpu_color import run_on_device, srgb_to_linear, linear_to_srgb, luminance_rec709, blend
+
+
+def parametric_tone_mask(luminance, center, sigma):
+    """Torch twin of utils.raw.parametric_tone_mask (Gaussian bell in luminance)."""
+    return torch.exp(-0.5 * ((luminance - center) / (sigma + 1e-10)) ** 2)
 
 
 class ExposureTone:
@@ -64,16 +67,13 @@ class ExposureTone:
              abs(whites) < 0.5 and abs(blacks) < 0.5)):
             return (image,)
 
-        images = tensor_to_numpy_batch(image)
-        results = []
-
-        for img in images:
-            original = img.copy()
+        def process(img):
+            original = img
             linear = srgb_to_linear(img)
 
             # 1. Exposure: multiply by 2^EV (photometrically correct)
             if abs(exposure) > 0.01:
-                linear *= (2.0 ** exposure)
+                linear = linear * (2.0 ** exposure)
 
             # 2. Contrast: S-curve around 18% grey
             if abs(contrast) > 0.5:
@@ -82,38 +82,38 @@ class ExposureTone:
                 # Power-based contrast: steepen or flatten around pivot
                 ratio = linear / (pivot + 1e-10)
                 power = 1.0 + c * 0.5  # contrast/100 * 0.5 gives subtle-to-strong range
-                linear = pivot * np.power(np.clip(ratio, 1e-10, None), power)
+                linear = pivot * torch.pow(ratio.clamp(min=1e-10), power)
 
             # Get luminance for parametric masks
-            lum = luminance_rec709(np.clip(linear, 0.0, 1.0))
+            lum = luminance_rec709(linear.clamp(0.0, 1.0))
 
             # 3. Parametric tone adjustments
             # Each slider modifies the image proportionally within its tonal range
             if abs(highlights) > 0.5:
                 mask = parametric_tone_mask(lum, center=0.75, sigma=0.15)
                 adj = highlights / 100.0
-                linear *= (1.0 + mask[..., np.newaxis] * adj * 0.5)
+                linear = linear * (1.0 + mask[..., None] * adj * 0.5)
 
             if abs(shadows) > 0.5:
                 mask = parametric_tone_mask(lum, center=0.25, sigma=0.15)
                 adj = shadows / 100.0
                 # Shadows use additive lift to open up without color shifts
-                linear += mask[..., np.newaxis] * adj * 0.15
+                linear = linear + mask[..., None] * adj * 0.15
 
             if abs(whites) > 0.5:
                 mask = parametric_tone_mask(lum, center=0.90, sigma=0.08)
                 adj = whites / 100.0
-                linear *= (1.0 + mask[..., np.newaxis] * adj * 0.3)
+                linear = linear * (1.0 + mask[..., None] * adj * 0.3)
 
             if abs(blacks) > 0.5:
                 mask = parametric_tone_mask(lum, center=0.10, sigma=0.08)
                 adj = blacks / 100.0
-                linear += mask[..., np.newaxis] * adj * 0.10
+                linear = linear + mask[..., None] * adj * 0.10
 
-            result = linear_to_srgb(np.clip(linear, 0.0, 1.0))
-            results.append(blend(original, result, strength))
+            result = linear_to_srgb(linear.clamp(0.0, 1.0))
+            return blend(original, result, strength)
 
-        return (numpy_batch_to_tensor(results),)
+        return (run_on_device(process, image),)
 
 
 NODE_CLASS_MAPPINGS = {"DarkroomExposureTone": ExposureTone}

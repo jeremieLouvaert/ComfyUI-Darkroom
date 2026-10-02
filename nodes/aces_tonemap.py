@@ -4,13 +4,10 @@ Apply industry-standard tonemapping curves to get the "ACES look" and other
 cinematic/filmic tone responses. Input can be scene-referred (HDR) or standard range.
 """
 
-import numpy as np
-
-from ..utils.color import blend
-from ..utils.image import tensor_to_numpy_batch, numpy_batch_to_tensor
-from ..utils.colorspace import (
-    srgb_decode, srgb_encode, TONEMAP_CURVES, TONEMAP_NAMES,
-    _SRGB_TO_ACES, _ACES_TO_SRGB, reinhard_extended
+from ..utils.colorspace import TONEMAP_NAMES, _SRGB_TO_ACES, _ACES_TO_SRGB
+from ..utils.gpu_color import (
+    run_on_device, blend, apply_matrix, srgb_decode, srgb_encode,
+    TONEMAP_CURVES, reinhard_extended,
 )
 
 
@@ -73,17 +70,11 @@ class ACESTonemap:
         print(f"[Darkroom] ACES Tonemap: {curve}, exposure={exposure_bias:+.1f}EV, "
               f"ACES gamut={'yes' if use_aces_gamut else 'no'}")
 
-        images = tensor_to_numpy_batch(image)
-        results = []
-
-        for img in images:
-            original = img.copy()
+        def process(img):
+            original = img
 
             # Step 1: get to linear light
-            if is_linear:
-                linear = img.copy()
-            else:
-                linear = srgb_decode(img)
+            linear = img if is_linear else srgb_decode(img)
 
             # Step 2: exposure adjustment (in linear light, before tonemapping)
             if abs(exposure_bias) > 0.01:
@@ -91,26 +82,25 @@ class ACESTonemap:
 
             # Step 3: convert to ACEScg if requested
             if use_aces_gamut:
-                linear = (linear @ _SRGB_TO_ACES.T).astype(np.float32)
+                linear = apply_matrix(linear, _SRGB_TO_ACES)
 
             # Step 4: apply tonemapping curve
             # Reinhard Extended needs the white_point parameter
             if curve == "Reinhard Extended":
-                tonemapped = reinhard_extended(np.maximum(linear, 0.0), white_point)
+                tonemapped = reinhard_extended(linear.clamp(min=0.0), white_point)
             else:
-                tonemapped = tonemap_fn(np.maximum(linear, 0.0))
+                tonemapped = tonemap_fn(linear.clamp(min=0.0))
 
             # Step 5: convert back from ACEScg to sRGB linear
             if use_aces_gamut:
-                tonemapped = (tonemapped @ _ACES_TO_SRGB.T).astype(np.float32)
-                tonemapped = np.clip(tonemapped, 0.0, 1.0)
+                tonemapped = apply_matrix(tonemapped, _ACES_TO_SRGB).clamp(0.0, 1.0)
 
             # Step 6: back to sRGB display
             result = srgb_encode(tonemapped)
 
-            results.append(blend(original, result, strength))
+            return blend(original, result, strength)
 
-        return (numpy_batch_to_tensor(results),)
+        return (run_on_device(process, image),)
 
 
 NODE_CLASS_MAPPINGS = {"DarkroomACESTonemap": ACESTonemap}

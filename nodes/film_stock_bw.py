@@ -4,10 +4,12 @@ Black & white conversion using real spectral sensitivity coefficients per film s
 """
 
 import numpy as np
+import torch
 
 from ..data.bw_stocks import BW_STOCKS, BW_STOCK_NAMES, COLOR_FILTERS, FILTER_NAMES
-from ..utils.color import srgb_to_linear, linear_to_srgb, characteristic_curve, blend
-from ..utils.image import tensor_to_numpy_batch, numpy_batch_to_tensor
+from ..utils.gpu_color import (
+    run_on_device, srgb_to_linear, linear_to_srgb, characteristic_curve, blend
+)
 
 
 class FilmStockBW:
@@ -83,22 +85,21 @@ class FilmStockBW:
             curve_params = (curve.toe_power, curve.shoulder_power, curve.slope,
                            curve.pivot_x, curve.pivot_y)
 
-        arrays = tensor_to_numpy_batch(image)
-        processed = []
+        w0, w1, w2 = (float(w) for w in weights)
 
-        for original in arrays:
+        def pipeline(original):
             # Linearize
             linear = srgb_to_linear(original)
 
             # Weighted sum to monochrome using film spectral sensitivity
-            bw = (linear[..., 0] * weights[0] +
-                  linear[..., 1] * weights[1] +
-                  linear[..., 2] * weights[2])
+            bw = (linear[..., 0] * w0 +
+                  linear[..., 1] * w1 +
+                  linear[..., 2] * w2)
 
             # Exposure shift (Zone System: each stop doubles/halves light)
             if abs(exposure_shift) > 0.01:
                 bw = bw * (2.0 ** exposure_shift)
-                bw = np.clip(bw, 0.0, 1.0)
+                bw = bw.clamp(0.0, 1.0)
 
             # Apply stock contrast curve
             bw = characteristic_curve(bw, *curve_params)
@@ -111,13 +112,12 @@ class FilmStockBW:
             bw = linear_to_srgb(bw)
 
             # Stack to 3-channel (ComfyUI requires RGB)
-            result = np.stack([bw, bw, bw], axis=-1).astype(np.float32)
+            result = torch.stack([bw, bw, bw], dim=-1)
 
             # Blend with original color image
-            result = blend(original, result, strength)
-            processed.append(result)
+            return blend(original, result, strength)
 
-        return (numpy_batch_to_tensor(processed),)
+        return (run_on_device(pipeline, image),)
 
 
 NODE_CLASS_MAPPINGS = {

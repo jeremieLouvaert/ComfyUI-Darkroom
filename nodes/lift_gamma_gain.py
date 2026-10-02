@@ -5,9 +5,7 @@ DaVinci Resolve-style primary color correction with per-channel control.
 
 import numpy as np
 
-from ..utils.color import srgb_to_linear, linear_to_srgb, blend
-from ..utils.image import tensor_to_numpy_batch, numpy_batch_to_tensor
-from ..utils.grading import apply_lgg
+from ..utils import gpu_color as G
 
 
 class LiftGammaGain:
@@ -126,19 +124,13 @@ class LiftGammaGain:
 
         print(f"[Darkroom] Lift Gamma Gain: L={lift_rgb}, G={gamma_rgb}, Gn={gain_rgb}, O={offset_rgb}, strength={strength}")
 
-        images = tensor_to_numpy_batch(image)
-        results = []
+        def _pipeline(x):
+            linear = G.srgb_to_linear(x)
+            graded = G.apply_lgg(linear, lift_rgb, gamma_rgb, gain_rgb, offset_rgb)
+            result = G.linear_to_srgb(graded)
+            return G.blend(x, result, strength)
 
-        for img in images:
-            original = img.copy()
-            linear = srgb_to_linear(img)
-
-            graded = apply_lgg(linear, lift_rgb, gamma_rgb, gain_rgb, offset_rgb)
-
-            result = linear_to_srgb(graded)
-            results.append(blend(original, result, strength))
-
-        return (numpy_batch_to_tensor(results),)
+        return (G.run_on_device(_pipeline, image),)
 
 
 NODE_CLASS_MAPPINGS = {"DarkroomLiftGammaGain": LiftGammaGain}

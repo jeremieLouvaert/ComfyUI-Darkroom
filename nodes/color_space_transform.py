@@ -4,11 +4,10 @@ Convert between sRGB, Linear sRGB, ACEScg, ACEScct, Rec.2020, and DCI-P3.
 Makes Darkroom the only ACES-aware toolset in ComfyUI.
 """
 
-import numpy as np
+import torch
 
-from ..utils.color import blend
-from ..utils.image import tensor_to_numpy_batch, numpy_batch_to_tensor
-from ..utils.colorspace import convert_colorspace, SPACE_NAMES
+from ..utils.colorspace import SPACE_NAMES
+from ..utils.gpu_color import run_on_device, blend, convert_colorspace
 
 
 class ColorSpaceTransform:
@@ -53,11 +52,8 @@ class ColorSpaceTransform:
 
         print(f"[Darkroom] Color Space Transform: {source_space} → {target_space}")
 
-        images = tensor_to_numpy_batch(image)
-        results = []
-
-        for img in images:
-            original = img.copy()
+        def process(img):
+            original = img
             converted = convert_colorspace(img, source_space, target_space)
 
             # Gamut handling
@@ -66,11 +62,11 @@ class ColorSpaceTransform:
                 # Using a simple knee function at the boundaries
                 converted = self._soft_compress(converted)
             else:
-                converted = np.clip(converted, 0.0, 1.0)
+                converted = converted.clamp(0.0, 1.0)
 
-            results.append(blend(original, converted.astype(np.float32), strength))
+            return blend(original, converted, strength)
 
-        return (numpy_batch_to_tensor(results),)
+        return (run_on_device(process, image),)
 
     @staticmethod
     def _soft_compress(img, knee=0.9):
@@ -79,24 +75,20 @@ class ColorSpaceTransform:
         Values below knee/above (1-knee) pass through linearly.
         Values beyond are compressed asymptotically toward the boundary.
         """
-        result = img.copy()
+        result = img
 
         # Compress highlights (values above knee toward 1.0)
-        mask_hi = result > knee
-        if np.any(mask_hi):
-            excess = result[mask_hi] - knee
-            compressed = knee + (1.0 - knee) * (1.0 - np.exp(-excess / (1.0 - knee + 1e-10)))
-            result[mask_hi] = compressed
+        excess = result - knee
+        compressed = knee + (1.0 - knee) * (1.0 - torch.exp(-excess / (1.0 - knee + 1e-10)))
+        result = torch.where(result > knee, compressed, result)
 
         # Compress shadows (values below 1-knee toward 0.0)
         neg_knee = 1.0 - knee  # 0.1 for knee=0.9
-        mask_lo = result < neg_knee
-        if np.any(mask_lo):
-            deficit = neg_knee - result[mask_lo]
-            compressed = neg_knee - neg_knee * (1.0 - np.exp(-deficit / (neg_knee + 1e-10)))
-            result[mask_lo] = compressed
+        deficit = neg_knee - result
+        compressed = neg_knee - neg_knee * (1.0 - torch.exp(-deficit / (neg_knee + 1e-10)))
+        result = torch.where(result < neg_knee, compressed, result)
 
-        return np.clip(result, 0.0, 1.0).astype(np.float32)
+        return result.clamp(0.0, 1.0)
 
 
 NODE_CLASS_MAPPINGS = {"DarkroomColorSpaceTransform": ColorSpaceTransform}
