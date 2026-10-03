@@ -4,11 +4,12 @@ Lightroom-style luminance + color noise reduction with detail preservation.
 Uses guided filter for luminance and gaussian chrominance smoothing.
 """
 
-import numpy as np
-from scipy.ndimage import gaussian_filter, uniform_filter
+import torch
 
-from ..utils.color import luminance_rec709, blend
-from ..utils.image import tensor_to_numpy_batch, numpy_batch_to_tensor
+from ..utils.gpu_color import run_on_device, blend
+from ..utils.gpu_filters import gaussian_filter, uniform_filter
+
+GUIDE_DTYPE = torch.float32   # the box-filter statistics; see the golden gate
 
 
 def _guided_filter(guide, target, radius, eps):
@@ -18,18 +19,19 @@ def _guided_filter(guide, target, radius, eps):
     Both inputs: (H, W) float32.
     """
     size = 2 * radius + 1
-    mean_g = uniform_filter(guide, size=size)
-    mean_t = uniform_filter(target, size=size)
-    corr_gt = uniform_filter(guide * target, size=size)
-    var_g = uniform_filter(guide * guide, size=size) - mean_g * mean_g
+    g, t = guide.to(GUIDE_DTYPE), target.to(GUIDE_DTYPE)
+    mean_g = uniform_filter(g, size)
+    mean_t = uniform_filter(t, size)
+    corr_gt = uniform_filter(g * t, size)
+    var_g = uniform_filter(g * g, size) - mean_g * mean_g
 
     a = (corr_gt - mean_g * mean_t) / (var_g + eps)
     b = mean_t - a * mean_g
 
-    mean_a = uniform_filter(a, size=size)
-    mean_b = uniform_filter(b, size=size)
+    mean_a = uniform_filter(a, size)
+    mean_b = uniform_filter(b, size)
 
-    return (mean_a * guide + mean_b).astype(np.float32)
+    return (mean_a * g + mean_b).to(torch.float32)
 
 
 def _rgb_to_ycbcr(img):
@@ -38,7 +40,7 @@ def _rgb_to_ycbcr(img):
     y = 0.2126 * r + 0.7152 * g + 0.0722 * b
     cb = (b - y) / (2.0 * (1.0 - 0.0722) + 1e-10)
     cr = (r - y) / (2.0 * (1.0 - 0.2126) + 1e-10)
-    return y.astype(np.float32), cb.astype(np.float32), cr.astype(np.float32)
+    return y, cb, cr
 
 
 def _ycbcr_to_rgb(y, cb, cr):
@@ -46,8 +48,7 @@ def _ycbcr_to_rgb(y, cb, cr):
     r = y + cr * 2.0 * (1.0 - 0.2126)
     g = y - cb * 2.0 * (1.0 - 0.0722) * 0.0722 / 0.7152 - cr * 2.0 * (1.0 - 0.2126) * 0.2126 / 0.7152
     b = y + cb * 2.0 * (1.0 - 0.0722)
-    result = np.stack([r, g, b], axis=-1)
-    return np.clip(result, 0.0, 1.0).astype(np.float32)
+    return torch.stack([r, g, b], dim=-1).clamp(0.0, 1.0)
 
 
 # Presets: (luminance_amount, luminance_detail, luminance_contrast, color_amount, color_detail)
@@ -123,13 +124,10 @@ class NoiseReduction:
         if strength <= 0.0 or (luminance_amount < 0.5 and color_amount < 0.5):
             return (image,)
 
-        images = tensor_to_numpy_batch(image)
-        results = []
-
-        for img in images:
-            original = img.copy()
+        def one(img):
+            original = img
             h, w = img.shape[:2]
-            result = img.copy()
+            result = img.clone()
 
             # Scale radius relative to image size (reference: 1024px long edge)
             ref_size = 1024.0
@@ -153,7 +151,7 @@ class NoiseReduction:
                 # Multi-pass for stronger effect at high amounts
                 passes = 1 if luminance_amount < 50 else (2 if luminance_amount < 80 else 3)
 
-                y_filtered = y.copy()
+                y_filtered = y.clone()
                 for _ in range(passes):
                     y_filtered = _guided_filter(y, y_filtered, radius, eps)
 
@@ -184,15 +182,14 @@ class NoiseReduction:
                     cr_smooth = _guided_filter(y, cr, chroma_radius, chroma_eps)
                 else:
                     # Low detail = pure gaussian (strongest smoothing)
-                    cb_smooth = gaussian_filter(cb, sigma=sigma)
-                    cr_smooth = gaussian_filter(cr, sigma=sigma)
+                    cb_smooth = gaussian_filter(cb, sigma)
+                    cr_smooth = gaussian_filter(cr, sigma)
 
                 result = _ycbcr_to_rgb(y, cb_smooth, cr_smooth)
 
-            result = np.clip(result, 0.0, 1.0).astype(np.float32)
-            results.append(blend(original, result, strength))
+            return blend(original, result.clamp(0.0, 1.0), strength)
 
-        return (numpy_batch_to_tensor(results),)
+        return (run_on_device(lambda x: torch.stack([one(i) for i in x], 0), image),)
 
 
 NODE_CLASS_MAPPINGS = {"DarkroomNoiseReduction": NoiseReduction}

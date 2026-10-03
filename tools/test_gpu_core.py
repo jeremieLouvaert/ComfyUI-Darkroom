@@ -81,7 +81,13 @@ NODES = [
     "DarkroomVibrance", "DarkroomLumVsSat", "DarkroomSatVsSat", "DarkroomOkLabColor",
     "DarkroomExposureTone", "DarkroomWhiteBalance", "DarkroomACESTonemap", "DarkroomColorSpaceTransform",
     "DarkroomLUTApply", "DarkroomSpectralFilmStock",
+    # phase 2: spatial nodes (blurs, FFT, procedural fields) also get a larger photo
+    "DarkroomClarityTextureDehaze", "DarkroomLightLeak", "DarkroomNoiseReduction",
+    "DarkroomHalation", "DarkroomFilmDamage",
 ]
+PER_FRAME = {"DarkroomFilmDamage"}   # vary_per_frame: a batch differs from singles on purpose
+SPATIAL = {"DarkroomClarityTextureDehaze", "DarkroomLightLeak", "DarkroomNoiseReduction",
+           "DarkroomHalation", "DarkroomFilmDamage"}
 
 # A non-identity 17^3 LUT (gamma + channel twist) so trilinear is exercised.
 CUBE = os.path.join(folder_paths.input_directory, "golden.cube")
@@ -122,6 +128,24 @@ def _inputs():
 
 
 INPUTS = {k: torch.from_numpy(np.ascontiguousarray(v))[None] for k, v in _inputs().items()}
+
+
+def _photo_big():
+    jpg = os.path.join(PACK, "test_data", "test.jpg")
+    if os.path.isfile(jpg):
+        from PIL import Image
+        im = Image.open(jpg).convert("RGB").resize((288, 192), Image.BILINEAR)
+        a = np.asarray(im, dtype=np.float32) / 255.0
+    else:
+        a = np.random.default_rng(9).random((192, 288, 3), dtype=np.float32) ** 2.2
+    return torch.from_numpy(np.ascontiguousarray(a))[None]
+
+
+PHOTO_BIG = _photo_big()
+
+
+def inputs_for(key):
+    return {**INPUTS, "photo_big": PHOTO_BIG} if key in SPATIAL else INPUTS
 
 
 # --- parameter cases ----------------------------------------------------------------
@@ -192,7 +216,7 @@ def capture(only):
     for key in only or NODES:
         image_arg, base, cases = _cases(key)
         for label, change in cases:
-            for iname, img in INPUTS.items():
+            for iname, img in inputs_for(key).items():
                 cid = f"{key}|{label}|{iname}"
                 try:
                     outs = _run(key, image_arg, {**base, **change}, img)
@@ -202,7 +226,7 @@ def capture(only):
                     meta.setdefault("outputs", {})[cid] = len(outs)
                 except Exception as e:
                     meta["cases"][cid] = f"raised {type(e).__name__}"
-        print(f"captured {key}: {len(cases)} param cases x {len(INPUTS)} inputs")
+        print(f"captured {key}: {len(cases)} param cases x {len(inputs_for(key))} inputs")
     np.savez_compressed(GOLDEN, **arrays)
     with open(META, "w", encoding="utf-8") as f:
         json.dump(meta, f, indent=1)
@@ -218,7 +242,7 @@ def compare(only):
         image_arg, base, cases = _cases(key)
         node_worst = 0.0
         for label, change in cases:
-            for iname, img in INPUTS.items():
+            for iname, img in inputs_for(key).items():
                 cid = f"{key}|{label}|{iname}"
                 if cid not in meta["cases"]:
                     continue
@@ -257,7 +281,10 @@ def compare(only):
                     if d > TOL:
                         fails += 1
                         print(f"  FAIL {tag}: max|diff| {d:.6f} ({d * 255:.2f}/255)")
-        # batch of two == two singles
+        # batch of two == two singles (not for nodes that vary per frame by design)
+        if key in PER_FRAME:
+            worst[key] = node_worst
+            continue
         try:
             pair = torch.cat([INPUTS["noise"], INPUTS["photo"]], 0)
             b = _run(key, image_arg, base, pair)[0]

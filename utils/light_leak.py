@@ -118,6 +118,40 @@ def _warp_noise(H, W, scale_px, seed, octaves=3):
     return acc - acc.mean()
 
 
+def _warp_noise_torch(H, W, scale_px, seed, octaves, device):
+    """
+    _warp_noise() on the GPU, same random grids, same result (float64).
+
+    scipy's zoom is linear and separable, so zoom(g) == M0 @ g @ M1 where M0, M1
+    are zoom applied to identity matrices (verified to 1e-15 incl. scipy's
+    'nearest' boundary handling). The two small matmuls replace a full-frame
+    cubic-spline evaluation on the CPU.
+    """
+    import torch
+    from scipy.ndimage import zoom
+
+    rng = np.random.default_rng((int(seed) * 7919 + 13) & 0x7FFFFFFF)
+    acc = torch.zeros(H, W, device=device, dtype=torch.float64)
+    amp, total = 1.0, 0.0
+    for o in range(max(1, int(octaves))):
+        sc = max(scale_px / (2 ** o), 2.0)
+        gh, gw = max(2, int(H / sc) + 2), max(2, int(W / sc) + 2)
+        g = rng.random((gh, gw))
+        M0 = zoom(np.eye(gh), (H / gh + 1e-9, 1.0), order=3, mode="nearest")
+        M1 = zoom(np.eye(gw), (1.0, W / gw + 1e-9), order=3, mode="nearest")
+        t = lambda a: torch.as_tensor(a, device=device, dtype=torch.float64)
+        up = (t(M0) @ t(g) @ t(M1))[:H, :W]
+        if up.shape != (H, W):
+            pad = torch.zeros(H, W, device=device, dtype=torch.float64)
+            pad[:up.shape[0], :up.shape[1]] = up
+            up = pad
+        acc += amp * up
+        total += amp
+        amp *= 0.30
+    acc /= total
+    return acc - acc.mean()
+
+
 def _corner_field(H, W, corner):
     ys = np.arange(H)[:, None] * np.ones((1, W))
     xs = np.ones((H, 1)) * np.arange(W)[None, :]
@@ -257,6 +291,98 @@ def leak_field(H, W, mode, *, edge="top", corner="top-left",
         for c in range(3):
             G[..., c] *= BACKING_PAPER_TINT[c]
 
+    return intensity * G
+
+
+def leak_field_torch(H, W, mode, *, device, edge="top", corner="top-left",
+                     intensity=1.0, lam_ref=200.0, mod_ratio=0.35, seed=42,
+                     color_source="base path", pinhole_count=3,
+                     hole_mm=0.30, flange_mm=50.0, source_angle=0.0093,
+                     displacement=0.0, displacement_scale=380.0, displacement_octaves=2,
+                     lam_ratio=LAMBDA_RATIO):
+    """
+    leak_field() on the GPU (float32), same random draws in the same order.
+    The full-resolution field maths (distance fields, the perforation comb's
+    erf sums, exp falloff) runs on `device`; only the small warp-noise grids are
+    built with numpy/scipy exactly as in _warp_noise. Kept within the 0.5/255
+    golden gate of tools/test_gpu_core.py; leak_field() stays the reference.
+    """
+    import torch
+
+    rng = np.random.default_rng(int(seed) & 0x7FFFFFFF)
+    L = max(H, W)
+    s = L / 1024.0
+    lam_R = max(lam_ref * s, 1e-6)
+    lam = [lam_R * (r / lam_ratio[0]) for r in lam_ratio]
+    f32 = dict(device=device, dtype=torch.float32)
+    ys = torch.arange(H, **f32).view(H, 1).expand(H, W)
+    xs = torch.arange(W, **f32).view(1, W).expand(H, W)
+
+    if mode == "pinhole":
+        px_per_mm = L / APERTURE_MM
+        core_r = 0.5 * flange_mm * source_angle * px_per_mm
+        blur = max(0.5 * hole_mm * px_per_mm, 0.75)
+        acc = torch.zeros(H, W, **f32)
+        for _ in range(int(pinhole_count)):
+            cy, cx = rng.random() * H, rng.random() * W
+            amp = 0.55 + 0.65 * rng.random()
+            d = torch.sqrt((ys - cy) ** 2 + (xs - cx) ** 2)
+            acc = acc + amp * ((core_r - d) / blur + 0.5).clamp(0.0, 1.0)
+        tint = DAYLIGHT_TINT if color_source == "neutral" else (1.0, 1.0, 1.0)
+        return intensity * torch.stack([acc * tint[c] for c in range(3)], -1)
+
+    def edge_fields(e):
+        if e == "top":
+            return ys, xs
+        if e == "bottom":
+            return (H - 1) - ys, xs
+        if e == "left":
+            return xs, ys
+        if e == "right":
+            return (W - 1) - xs, ys
+        raise ValueError(e)
+
+    warp = None
+    if displacement > 0.0:
+        scale_ref = max(float(displacement_scale), WARP_SCALE_FLOOR)
+        noise = _warp_noise_torch(H, W, scale_ref * s, seed, min(int(displacement_octaves), 2), device)
+        warp = ((2.0 * displacement * s) * noise).to(torch.float32)
+
+    if mode == "gradient":
+        if edge and not corner:
+            d = edge_fields(edge)[0]
+        elif corner:
+            cy = 0.0 if "top" in corner else (H - 1)
+            cx = 0.0 if "left" in corner else (W - 1)
+            d = torch.sqrt((ys - cy) ** 2 + (xs - cx) ** 2)
+        else:
+            d = edge_fields(edge)[0]
+        if warp is not None:
+            d = (d + warp).clamp(min=0.0)
+        mod = 1.0
+    elif mode == "sprocket":
+        d, u = edge_fields(edge)
+        if warp is not None:
+            d = (d + warp).clamp(min=0.0)
+        pitch_px = (PERF_PITCH_MM / APERTURE_MM) * L
+        sigma0 = (PERF_CORNER_MM / APERTURE_MM) * L
+        phase = rng.random() * pitch_px
+        d_perf = d + (PERF_TO_APERTURE_MM / APERTURE_MM) * L
+        half = 0.5 * DUTY * pitch_px
+        sigma = (sigma0 + mod_ratio * torch.sqrt(d_perf.clamp(min=0.0) * pitch_px)).clamp(min=1e-6)
+        ph = torch.remainder(u - phase, pitch_px) - 0.5 * pitch_px
+        denom = sigma * math.sqrt(2.0)
+        acc = torch.zeros_like(ph)
+        for k in (-2, -1, 0, 1, 2):
+            c = k * pitch_px
+            acc = acc + 0.5 * (torch.erf((ph - (c - half)) / denom) - torch.erf((ph - (c + half)) / denom))
+        mod = acc / DUTY
+    else:
+        raise ValueError(mode)
+
+    G = torch.stack([torch.exp(-d / lam[c]) * mod for c in range(3)], -1)
+    if color_source == "backing paper":
+        G = G * torch.as_tensor(np.asarray(BACKING_PAPER_TINT, np.float32), device=device)
     return intensity * G
 
 

@@ -4,10 +4,10 @@ Three mid-frequency contrast tools in one node.
 """
 
 import numpy as np
-from scipy.ndimage import gaussian_filter, minimum_filter
+import torch
 
-from ..utils.color import luminance_rec709, blend
-from ..utils.image import tensor_to_numpy_batch, numpy_batch_to_tensor
+from ..utils.gpu_color import run_on_device, luminance_rec709, blend
+from ..utils.gpu_filters import gaussian_filter, minimum_filter
 from ..data.ai_mitigation_presets import AI_MITIGATION_CTD, CTD_PRESET_NAMES
 
 
@@ -59,12 +59,9 @@ class ClarityTextureDehaze:
         if strength <= 0.0 or (abs(clarity) < 0.5 and abs(texture) < 0.5 and abs(dehaze) < 0.5):
             return (image,)
 
-        images = tensor_to_numpy_batch(image)
-        results = []
-
-        for img in images:
-            original = img.copy()
-            result = img.copy()
+        def one(img):
+            """One image (H, W, 3) on the device: same steps as the numpy original."""
+            result = img.clone()
             h, w = img.shape[:2]
 
             # All three tools operate via luminance to avoid color shifts
@@ -72,64 +69,43 @@ class ClarityTextureDehaze:
 
             # --- Clarity: large-scale local contrast ---
             if abs(clarity) > 0.5:
-                clarity_sigma = max(h, w) * 0.04
-                blur = gaussian_filter(lum, sigma=clarity_sigma)
+                blur = gaussian_filter(lum, max(h, w) * 0.04)
                 detail = lum - blur
                 amount = clarity / 100.0 * 0.5
-
-                # Apply to RGB proportionally (preserves color ratios)
-                lum_safe = lum + 1e-6
-                for c in range(3):
-                    result[..., c] += detail * amount * (result[..., c] / lum_safe)
+                lum_safe = lum + 1e-6        # applied per channel, preserves colour ratios
+                result = result + (detail * amount)[..., None] * (result / lum_safe[..., None])
 
             # --- Texture: band-pass fine detail ---
             if abs(texture) > 0.5:
-                small_sigma = 1.0
-                large_sigma = max(h, w) * 0.01
-                small_blur = gaussian_filter(lum, sigma=small_sigma)
-                large_blur = gaussian_filter(lum, sigma=large_sigma)
-                texture_detail = small_blur - large_blur
+                texture_detail = gaussian_filter(lum, 1.0) - gaussian_filter(lum, max(h, w) * 0.01)
                 amount = texture / 100.0 * 0.5
-
                 lum_safe = luminance_rec709(result) + 1e-6
-                for c in range(3):
-                    result[..., c] += texture_detail * amount * (result[..., c] / lum_safe)
+                result = result + (texture_detail * amount)[..., None] * (result / lum_safe[..., None])
 
             # --- Dehaze: dark channel prior (simplified) ---
             if abs(dehaze) > 0.5:
                 dehaze_amount = dehaze / 100.0
-
                 if dehaze_amount > 0:
-                    # Dark channel: min across RGB in a local patch
-                    min_rgb = np.min(result, axis=-1)
-                    patch_size = max(15, max(h, w) // 50)
-                    dark_channel = minimum_filter(min_rgb, size=patch_size)
-
-                    # Atmospheric light: mean of brightest 0.1% in dark channel
+                    min_rgb = result.amin(dim=-1)
+                    dark_channel = minimum_filter(min_rgb, max(15, max(h, w) // 50))
+                    # atmospheric light: mean of the brightest 0.1% of the dark channel
                     n_bright = max(1, int(h * w * 0.001))
-                    flat_dark = dark_channel.ravel()
-                    bright_indices = np.argpartition(flat_dark, -n_bright)[-n_bright:]
-                    flat_img = result.reshape(-1, 3)
-                    atmos = flat_img[bright_indices].mean(axis=0)
-                    atmos = np.maximum(atmos, 0.1)
-
-                    # Transmission map
-                    transmission = 1.0 - dehaze_amount * (dark_channel / (atmos.max() + 1e-6))
-                    transmission = np.clip(transmission, 0.1, 1.0)
-
-                    # Recover scene
-                    for c in range(3):
-                        result[..., c] = (result[..., c] - atmos[c]) / transmission + atmos[c]
+                    # numpy's argpartition on the CPU: with tied values (flat areas) the
+                    # chosen pixels must be the same ones the original picked
+                    flat_dark = dark_channel.reshape(-1).cpu().numpy()
+                    bright = torch.from_numpy(np.argpartition(flat_dark, -n_bright)[-n_bright:]).to(result.device)
+                    atmos = result.reshape(-1, 3)[bright].mean(dim=0).clamp(min=0.1)
+                    transmission = (1.0 - dehaze_amount * (dark_channel / (atmos.max() + 1e-6))).clamp(0.1, 1.0)
+                    result = (result - atmos) / transmission[..., None] + atmos
                 else:
-                    # Negative dehaze: add haze (blend toward mean brightness)
-                    mean_val = result.mean()
+                    # negative dehaze: add haze (blend toward mean brightness)
                     haze_amount = abs(dehaze_amount)
-                    result = result * (1.0 - haze_amount * 0.5) + mean_val * haze_amount * 0.5
+                    result = result * (1.0 - haze_amount * 0.5) + result.mean() * haze_amount * 0.5
 
-            result = np.clip(result, 0.0, 1.0).astype(np.float32)
-            results.append(blend(original, result, strength))
+            return blend(img, result.clamp(0.0, 1.0), strength)
 
-        return (numpy_batch_to_tensor(results),)
+        # per image: the dehaze statistics (brightest pixels, mean) are per image
+        return (run_on_device(lambda x: torch.stack([one(i) for i in x], 0), image),)
 
 
 NODE_CLASS_MAPPINGS = {"DarkroomClarityTextureDehaze": ClarityTextureDehaze}

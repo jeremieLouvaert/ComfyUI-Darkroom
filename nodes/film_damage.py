@@ -26,9 +26,9 @@ contains no polarity or blending logic at all.
 import numpy as np
 import torch
 
-from ..utils.color import srgb_to_linear, linear_to_srgb
-from ..utils.image import tensor_to_numpy_batch, numpy_batch_to_tensor
-from ..utils.film_damage import build_tau, composite, defect_mask
+from ..utils import gpu_color as gc
+from ..utils.image import tensor_to_numpy_batch
+from ..utils.film_damage import film_damage_torch
 
 
 ORIGINS = ["negative (dust prints white)", "positive / scan-side (dust reads dark)"]
@@ -191,30 +191,29 @@ class DarkroomFilmDamage:
               f"scratches={scratch_count}@{side} depth={scratch_depth}, "
               f"axis={axis}, seed={seed}")
 
+        dev = gc.device()
         out_images, out_masks = [], []
-        for i, img in enumerate(images):
-            h, w = img.shape[:2]
-            frame_seed = (int(seed) + i * 7919) if vary_per_frame else int(seed)
+        with torch.no_grad():
+            for i in range(image.shape[0]):
+                img = image[i].to(dev, torch.float32)
+                h, w = img.shape[:2]
+                frame_seed = (int(seed) + i * 7919) if vary_per_frame else int(seed)
+                out, mask = film_damage_torch(
+                    img[..., :3], h, w, frame_seed, origin, print_gamma,
+                    density=density,
+                    dust_amount=dust_amount, dirt_amount=dirt_amount,
+                    hair_amount=hair_amount, scratch_count=scratch_count,
+                    dust_size=dust_size, dirt_size=dirt_size,
+                    hair_length=hair_length, scratch_width=scratch_width,
+                    scratch_side=side, scratch_depth=scratch_depth,
+                    layer_density=layer_density, film_key=film_key,
+                    transport_axis=axis, softness=softness,
+                    base_scratch_cast=base_scratch_cast,
+                )
+                out_images.append(out.cpu())
+                out_masks.append(mask.cpu())
 
-            tau = build_tau(
-                h, w, frame_seed,
-                density=density,
-                dust_amount=dust_amount, dirt_amount=dirt_amount,
-                hair_amount=hair_amount, scratch_count=scratch_count,
-                dust_size=dust_size, dirt_size=dirt_size,
-                hair_length=hair_length, scratch_width=scratch_width,
-                scratch_side=side, scratch_depth=scratch_depth,
-                layer_density=layer_density, film_key=film_key,
-                transport_axis=axis, softness=softness, origin=origin,
-                base_scratch_cast=base_scratch_cast,
-            )
-
-            lin = srgb_to_linear(img.astype(np.float64))
-            out = composite(lin, tau, origin, print_gamma)
-            out_images.append(linear_to_srgb(out).astype(np.float32))
-            out_masks.append(defect_mask(tau))
-
-        return (numpy_batch_to_tensor(out_images), _mask_batch_to_tensor(out_masks))
+        return (torch.stack(out_images, 0), torch.stack(out_masks, 0))
 
 
 NODE_CLASS_MAPPINGS = {

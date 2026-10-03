@@ -24,9 +24,9 @@ Procedural only. No scan plates: the commercial leak packs forbid redistribution
 import numpy as np
 import torch
 
-from ..utils.color import srgb_to_linear, linear_to_srgb
-from ..utils.image import tensor_to_numpy_batch, numpy_batch_to_tensor
-from ..utils.light_leak import leak_field, composite, WARP_SCALE_FLOOR
+from ..utils.image import tensor_to_numpy_batch
+from ..utils import gpu_color as gc
+from ..utils.light_leak import leak_field_torch, WARP_SCALE_FLOOR
 
 
 LEAK_TYPES = [
@@ -160,27 +160,25 @@ class DarkroomLightLeak:
               f"strength={strength}, falloff={falloff}, colour={csrc}, "
               f"displacement={displacement}@{displacement_scale}, seed={seed}")
 
+        dev = gc.device()
         out_images, out_masks = [], []
-        for i, img in enumerate(images):
-            h, w = img.shape[:2]
-            frame_seed = (int(seed) + i * 7919) if vary_per_frame else int(seed)
+        with torch.no_grad():
+            for i in range(image.shape[0]):
+                img = image[i].to(dev, torch.float32)
+                h, w = img.shape[:2]
+                frame_seed = (int(seed) + i * 7919) if vary_per_frame else int(seed)
+                G = leak_field_torch(
+                    h, w, mode, device=dev, edge=edge, corner=corner,
+                    lam_ref=falloff, mod_ratio=diffusion, seed=frame_seed,
+                    color_source=csrc, pinhole_count=pinhole_count,
+                    hole_mm=pinhole_diameter, flange_mm=flange_distance,
+                    displacement=displacement, displacement_scale=displacement_scale,
+                )
+                out = (gc.srgb_to_linear(img[..., :3]) + strength * G).clamp(0.0, 1.0)
+                out_images.append(gc.linear_to_srgb(out).cpu())
+                out_masks.append((strength * G.amax(dim=-1)).clamp(0.0, 1.0).cpu())
 
-            G = leak_field(
-                h, w, mode, edge=edge, corner=corner,
-                lam_ref=falloff, mod_ratio=diffusion, seed=frame_seed,
-                color_source=csrc, pinhole_count=pinhole_count,
-                hole_mm=pinhole_diameter, flange_mm=flange_distance,
-                displacement=displacement, displacement_scale=displacement_scale,
-            )
-
-            lin = srgb_to_linear(img.astype(np.float64))
-            out = composite(lin, G, strength)
-            out_images.append(linear_to_srgb(out).astype(np.float32))
-            m = np.clip(strength * G.max(axis=2), 0.0, 1.0).astype(np.float32)
-            out_masks.append(m)
-
-        return (numpy_batch_to_tensor(out_images),
-                torch.cat([torch.from_numpy(m).unsqueeze(0) for m in out_masks], dim=0))
+        return (torch.stack(out_images, 0), torch.stack(out_masks, 0))
 
 
 NODE_CLASS_MAPPINGS = {

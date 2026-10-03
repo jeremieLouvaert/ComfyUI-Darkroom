@@ -25,10 +25,10 @@ hue-preserving ratio-recombine (LOAD-BEARING CALL 2).
 """
 
 import numpy as np
-from scipy.signal import fftconvolve
+import torch
 
-from ..utils.color import srgb_to_linear, linear_to_srgb
-from ..utils.image import tensor_to_numpy_batch, numpy_batch_to_tensor, halation_psf
+from ..utils import gpu_color as gc
+from ..utils.image import halation_psf
 
 
 # Preset channel weights w_c (docs/halation-derivation.md sec 4). Ordering
@@ -49,6 +49,18 @@ PRESET_NAMES = ["CineStill 800T", "Vision3 subtle", "B&W plate", "Custom"]
 # kernel is built from, so repeated batch frames / repeated runs at the same
 # widget settings don't rebuild the FFT kernel from scratch.
 _KERNEL_CACHE = {}
+
+
+def _fft_size(n):
+    """Smallest m >= n whose only prime factors are 2, 3 and 5."""
+    while True:
+        x = n
+        for p in (2, 3, 5):
+            while x % p == 0:
+                x //= p
+        if x == 1:
+            return n
+        n += 1
 
 
 def _get_kernel(ring_px, tail_px, balance, max_ksize):
@@ -139,30 +151,31 @@ class Halation:
               f"balance={ring_tail_balance}, ah_strength={ah}, "
               f"w=({w[0]:.2f},{w[1]:.2f},{w[2]:.2f}), knee={knee}")
 
-        images = tensor_to_numpy_batch(image)
-        results = []
-
-        for img in images:
+        def one(img):
             h, w_px = img.shape[:2]
             long_edge = max(h, w_px)
             scale = long_edge / 1024.0
-            ring_px = ring_radius * scale
-            tail_px = tail_length * scale
-            max_ksize = max(min(h, w_px) - 1, 1)
+            kernel = _get_kernel(ring_radius * scale, tail_length * scale, ring_tail_balance,
+                                 max(min(h, w_px) - 1, 1))
+            lin = gc.srgb_to_linear(img)
+            E = (lin - knee).clamp(min=0.0) / (1.0 - knee)
+            # scipy fftconvolve(mode="same"): zero-padded linear convolution, centred crop
+            k = torch.as_tensor(np.ascontiguousarray(kernel, dtype=np.float32), device=img.device)
+            kh, kw = k.shape
+            # zero-padding past h+kh-1 does not change a linear convolution, so pad
+            # to FFT-friendly sizes (2^a 3^b 5^c): ~2x faster and half the memory
+            fh, fw = _fft_size(h + kh - 1), _fft_size(w_px + kw - 1)
+            y0, x0 = (kh - 1) // 2, (kw - 1) // 2
+            fk = torch.fft.rfft2(k, s=(fh, fw))
+            chans = []
+            for c in range(3):                     # one channel at a time: 1/3 the peak VRAM
+                full = torch.fft.irfft2(torch.fft.rfft2(E[..., c], s=(fh, fw)) * fk, s=(fh, fw))
+                chans.append(full[y0:y0 + h, x0:x0 + w_px] * w[c])
+                del full
+            Hc = torch.stack(chans, -1)
+            return gc.linear_to_srgb((lin + frac * Hc).clamp(0.0, 1.0))
 
-            kernel = _get_kernel(ring_px, tail_px, ring_tail_balance, max_ksize)
-
-            lin = srgb_to_linear(img)
-            E = np.clip(lin - knee, 0.0, None) / (1.0 - knee)
-
-            H = np.empty_like(lin)
-            for c in range(3):
-                H[..., c] = fftconvolve(E[..., c], kernel, mode="same") * w[c]
-
-            out = np.clip(lin + frac * H, 0.0, 1.0)
-            results.append(linear_to_srgb(out))
-
-        return (numpy_batch_to_tensor(results),)
+        return (gc.run_on_device(lambda x: torch.stack([one(i) for i in x], 0), image),)
 
 
 NODE_CLASS_MAPPINGS = {

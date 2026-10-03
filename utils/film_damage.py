@@ -230,14 +230,16 @@ def dye_tau_weights(depth, film_key, layer_density=0.7):
 # Field builder + composite
 # ---------------------------------------------------------------------------
 
-def build_tau(H, W, seed, *, density=0.5,
+def tau_fields(H, W, seed, *, density=0.5,
               dust_amount=1.0, dirt_amount=1.0, hair_amount=1.0, scratch_count=3,
               dust_size=0.35, dirt_size=1.1, hair_length=140.0, scratch_width=0.8,
               scratch_side="base", scratch_depth=0.5, layer_density=0.7,
               film_key="c41", transport_axis="auto",
               softness=0.0, origin="negative", base_scratch_cast=0.0):
     """
-    Build the per-channel transmittance field tau (H, W, 3).
+    The defect layers before assembly: (occl, gouge, softness_px, dye, cast).
+    All random draws and the stamping happen here (CPU, local patches only);
+    build_tau() assembles them in numpy, film_damage_torch() on the GPU.
 
     Sizes are ref-px @1024 long edge and are scaled here. Defect COUNT is a
     per-frame physical quantity and deliberately does NOT scale with pixel area:
@@ -302,6 +304,25 @@ def build_tau(H, W, seed, *, density=0.5,
             # emulsion gouges are material loss -> no shoulder
             _stamp_polyline(target, pts, w, amp, lobe=0.0 if emulsion else 0.35)
 
+    dye = dye_tau_weights(scratch_depth, film_key, layer_density)
+
+    # Optional base-side colour cast. HONEST STATUS: the green/cyan claim for
+    # base-side scratches on colour negative is an INFERENCE chained from
+    # wet-gate refractive physics + orange-mask channel gain; no single source
+    # states the causal link. Off by default, exposed as taste only.
+    cast = (1.0, 1.0 - 0.35 * base_scratch_cast, 1.0 - 0.12 * base_scratch_cast)
+    return occl, gouge, softness, dye, cast
+
+
+def build_tau(H, W, seed, **kw):
+    """
+    Build the per-channel transmittance field tau (H, W, 3) (numpy reference).
+
+    Sizes are ref-px @1024 long edge and are scaled here. Defect COUNT is a
+    per-frame physical quantity and deliberately does NOT scale with pixel area:
+    a frame carries the dust it carries whatever resolution you scan it at.
+    """
+    occl, gouge, softness, dye, cast = tau_fields(H, W, seed, **kw)
     if softness > 0.05:
         occl = gaussian_filter(occl, softness)
         gouge = gaussian_filter(gouge, softness)
@@ -309,18 +330,37 @@ def build_tau(H, W, seed, *, density=0.5,
     # --- assemble tau -------------------------------------------------------
     tau = np.empty((H, W, 3), dtype=np.float64)
     occ = np.clip(occl, -0.6, 1.0)               # >0 blocks, <0 = lobe overshoot
-    dye = dye_tau_weights(scratch_depth, film_key, layer_density)
     g = np.clip(gouge, 0.0, 1.0)
-
-    # Optional base-side colour cast. HONEST STATUS: the green/cyan claim for
-    # base-side scratches on colour negative is an INFERENCE chained from
-    # wet-gate refractive physics + orange-mask channel gain; no single source
-    # states the causal link. Off by default, exposed as taste only.
-    cast = (1.0, 1.0 - 0.35 * base_scratch_cast, 1.0 - 0.12 * base_scratch_cast)
-
     for c in range(3):
         tau[..., c] = (1.0 - occ * cast[c]) * (1.0 + (dye[c] - 1.0) * g)
     return tau
+
+
+def film_damage_torch(img, H, W, seed, origin, print_gamma, **kw):
+    """
+    GPU twin of: tau = build_tau(...); composite(srgb_to_linear(img), tau, ...)
+    -> (sRGB image, defect mask). img is an (H, W, 3) float32 tensor on the
+    target device; the stamping stays on the CPU (tau_fields).
+    """
+    import torch
+    from . import gpu_color as gc
+    from .gpu_filters import gaussian_filter as gaussian_t
+
+    occl, gouge, softness, dye, cast = tau_fields(H, W, seed, origin=origin, **kw)
+    dev = img.device
+    occl = torch.as_tensor(occl, device=dev, dtype=torch.float32)
+    gouge = torch.as_tensor(gouge, device=dev, dtype=torch.float32)
+    if softness > 0.05:
+        occl = gaussian_t(occl, softness)
+        gouge = gaussian_t(gouge, softness)
+    occ = occl.clamp(-0.6, 1.0)
+    g = gouge.clamp(0.0, 1.0)
+    tau = torch.stack([(1.0 - occ * cast[c]) * (1.0 + (dye[c] - 1.0) * g) for c in range(3)], -1)
+    k = -float(print_gamma) if origin == "negative" else 1.0
+    lin = gc.srgb_to_linear(img)
+    out = (lin * tau.clamp(min=TAU_FLOOR) ** k).clamp(0.0, 1.0)
+    mask = (1.0 - tau).abs().amax(dim=-1).clamp(0.0, 1.0)
+    return gc.linear_to_srgb(out), mask
 
 
 def composite(lin, tau, origin, print_gamma):
