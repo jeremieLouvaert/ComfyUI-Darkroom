@@ -1,0 +1,67 @@
+name: GitHub release
+# Keeps the Releases page in step with the Comfy Registry: every version bump
+# in pyproject.toml gets a matching vX.Y.Z tag and release. Run it by hand to
+# make a release for the current version (as a draft unless told otherwise).
+on:
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - "pyproject.toml"
+  workflow_dispatch:
+    inputs:
+      draft:
+        description: "Create the release as a draft"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Tag and release the pyproject version
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Create the release if this version has none
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DRAFT: ${{ github.event_name == 'workflow_dispatch' && inputs.draft }}
+        run: |
+          set -euo pipefail
+          ver=$(sed -n 's/^version *= *"\([^"]*\)".*/\1/p' pyproject.toml | head -n 1)
+          if [ -z "$ver" ]; then
+            echo "No version found in pyproject.toml"
+            exit 1
+          fi
+          tag="v$ver"
+          # drafts have no tag yet, so look through the release list as well
+          if gh release view "$tag" >/dev/null 2>&1 \
+             || gh release list --limit 200 --json tagName -q '.[].tagName' | grep -qx "$tag"; then
+            echo "Release $tag already exists, nothing to do"
+            exit 0
+          fi
+          # the commit that set this version, so the tag sits on the release itself
+          target=$(git log -1 --format=%H -- pyproject.toml)
+          prev=$(git describe --tags --abbrev=0 "$target" 2>/dev/null || true)
+          {
+            echo "## Changes"
+            echo
+            if [ -n "$prev" ]; then
+              git log --no-merges --pretty='- %s' "$prev..$target" | head -n 100
+              echo
+              echo "Full changelog: https://github.com/$GITHUB_REPOSITORY/compare/$prev...$tag"
+            else
+              git log --no-merges --pretty='- %s' "$target" | head -n 50
+            fi
+          } > release-notes.md
+          flags=()
+          if [ "$DRAFT" = "true" ]; then
+            flags+=(--draft)
+          fi
+          gh release create "$tag" --target "$target" --title "$tag" --notes-file release-notes.md "${flags[@]}"
